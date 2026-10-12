@@ -69,3 +69,5 @@ manifest-path = "native/Cargo.toml"
 module-name = "xmlstreamer._xmlstreamer"
 python-source = "."
 features = ["pyo3/extension-module"]
+# Keep the banner asset in the sdist so the README image renders on PyPI.
+include = [{ path = "assets/*", format = "sdist" }]
