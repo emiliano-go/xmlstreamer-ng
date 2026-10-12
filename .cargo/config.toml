@@ -1,0 +1,5 @@
+# This machine rewrites GitHub HTTPS URLs to SSH via a global git config;
+# cargo's libgit2 cannot authenticate that way, so use the git CLI. maturin
+# invokes cargo from the project root, so the config lives here.
+[net]
+git-fetch-with-cli = true

@@ -1,0 +1,116 @@
+name: Release
+
+# Releases are cut by pushing a tag, not from the Actions UI:
+#     git tag vX.Y.Z && git push origin vX.Y.Z
+# X.Y.Z is xmlstreamer.__version__ - the sdist built below refuses a tag
+# that disagrees with what it built.
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+rc[0-9]+"
+      - "v[0-9]+.[0-9]+.[0-9]+[ab][0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  # The engine is a Rust extension: a release needs a wheel per platform, not
+  # just the one ubuntu produces.
+  wheels:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          args: --release --out dist --manifest-path native/Cargo.toml
+          manylinux: auto
+
+      - name: Upload wheel
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/*.whl
+
+  sdist:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build source distribution
+        run: uv build --sdist
+
+      # The tag is what users will install; if it disagrees with
+      # xmlstreamer.__version__, the wrong version ships under the
+      # right name.
+      - name: Tag must match the built version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if [ ! -f "dist/xmlstreamer-${tag}.tar.gz" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match what was built:"
+            ls -1 dist/
+            exit 1
+          fi
+
+      - name: Smoke test the source distribution
+        run: >
+          uv run --isolated --no-project --with dist/*.tar.gz
+          python -c "import xmlstreamer; print(xmlstreamer.__version__)"
+
+      - name: Upload sdist
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/*.tar.gz
+
+  # Separate job: only this one can mint an OIDC token, and it holds no
+  # checkout of the source.
+  publish:
+    needs: [wheels, sdist]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/xmlstreamer/
+    permissions:
+      id-token: write
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+
+      - name: Download distributions
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist/
+
+      # Trusted Publishing: the OIDC token above replaces an API token.
+      # "always" fails outright if OIDC is unavailable, never falls back.
+      - name: Publish to PyPI
+        run: uv publish --trusted-publishing always

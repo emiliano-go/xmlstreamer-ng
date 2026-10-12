@@ -1,0 +1,68 @@
+[build-system]
+requires = ["maturin>=1.5,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "xmlstreamer-ng"
+dynamic = ["version"]
+description = "Stream large or malformed XML feeds from HTTP, HTTPS, FTP, local files or standard input without loading them into memory."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Carlos A. Planchón", email = "carlosandresplanchonprestes@gmail.com" }
+]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Intended Audience :: Developers",
+  "Topic :: Software Development :: Libraries",
+  "Topic :: Text Processing :: Markup :: XML",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: 3.15"
+]
+keywords = ["xml", "streaming", "parser", "lightweight", "http", "https", "ftp", "stdin"]
+dependencies = [
+  "chardet>=5.2",
+  "requests>=2.33",
+  "rypipe>=0.4.0",
+  "pyarrow>=15"
+]
+
+[project.scripts]
+xmlstreamer = "xmlstreamer.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/carlosplanchon/xmlstreamer"
+Repository = "https://github.com/carlosplanchon/xmlstreamer"
+Issues = "https://github.com/carlosplanchon/xmlstreamer/issues"
+
+[dependency-groups]
+bench = [
+    "lxml>=6.1.1",
+    "xmltodict>=1.0.4",
+]
+dev = [
+  "hypothesis>=6.164.0",
+  "pytest>=8",
+]
+
+# The parsing engine is a Rust extension built on rypipe-core. Rebuild the
+# editable install when the native sources change.
+[tool.uv]
+cache-keys = [
+  { file = "pyproject.toml" },
+  { file = "xmlstreamer/__init__.py" },
+  { file = "native/Cargo.toml" },
+  { file = "native/src/**/*.rs" },
+]
+
+[tool.maturin]
+manifest-path = "native/Cargo.toml"
+module-name = "xmlstreamer._xmlstreamer"
+python-source = "."
+features = ["pyo3/extension-module"]

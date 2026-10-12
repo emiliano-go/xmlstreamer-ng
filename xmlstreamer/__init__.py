@@ -1,0 +1,1757 @@
+import collections.abc
+import dataclasses
+import io
+import logging
+import os
+import shutil
+import tempfile
+import time
+import urllib.request
+import weakref
+import zlib
+from contextlib import closing
+from datetime import datetime
+
+from urllib.parse import quote, urlparse, urlunparse
+
+import chardet
+
+import requests
+
+import re
+
+from . import _xmlstreamer
+
+from io import BufferedRandom
+
+from enum import Enum
+
+import codecs
+
+from collections.abc import Callable
+from collections.abc import Generator
+from collections.abc import Iterable
+from typing import NoReturn
+from typing import Any
+from typing import IO
+from typing import Generic
+from typing import TypeVar
+from typing import cast
+from typing import overload
+from typing import Self
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
+
+# Single source of truth: pyproject reads this attribute at build time.
+__version__ = "2.2.0"
+
+__all__ = [
+    "ApiKeyAuth",
+    "BasicAuth",
+    "BearerAuth",
+    "DigestAuth",
+    "FeedInterruptedError",
+    "Nested",
+    "FeedRun",
+    "ParsedItem",
+    "Raw",
+    "Sections",
+    "StreamInterpreter",
+    "Transport",
+    "USER_AGENT",
+    "UnsupportedSchemeError",
+    "XMLStreamerError",
+    "XmlAdapter",
+    "XmlSource",
+    "CastTypes",
+    "DropFields",
+    "FilterRows",
+    "FilterRowsAll",
+    "FilterRowsAny",
+    "FilterRowsNot",
+    "RenameFields",
+    "col",
+    "collect",
+    "to_arrow",
+    "to_csv",
+    "to_pandas",
+    "to_parquet",
+    "to_polars",
+    "__version__",
+    "to_nested",
+]
+
+# rypipe adapter surface. Imported at the bottom of this module so the
+# low-level streaming API above is defined first.
+from rypipe import col  # noqa: E402
+from .rypipe_adapter import XmlAdapter  # noqa: E402
+from .sinks import (  # noqa: E402
+    collect,
+    to_arrow,
+    to_csv,
+    to_pandas,
+    to_parquet,
+    to_polars,
+)
+from .source import XmlSource  # noqa: E402
+from .stages import (  # noqa: E402
+    CastTypes,
+    DropFields,
+    FilterRows,
+    FilterRowsAll,
+    FilterRowsAny,
+    FilterRowsNot,
+    RenameFields,
+)
+
+# Define the type of the feed_generator
+FeedGeneratorT = Generator[bytes, None, None]
+
+# An item filter takes the flat {path: text} item and keeps it on truthy.
+ItemFilterT = Callable[[dict[str, Any]], Any] | None
+
+# A local source: a filesystem path, or a binary file-like object.
+SourceT = str | os.PathLike | IO[bytes]
+
+# What a run yields, pinned at construction by output=: dicts by
+# default and under Nested(), bytes under Raw().
+ItemT = TypeVar("ItemT")
+
+
+USER_AGENT: str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWeb"\
+    "Kit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+
+# (connect, read) seconds; the read timeout is the maximum silence between
+# bytes on a streamed download, not a total duration. None disables both.
+DEFAULT_TIMEOUT: tuple = (30, 300)
+
+TimeoutT = float | tuple | None
+
+STREAM_CHUNK_SIZE: int = 64 * 1024
+
+def is_valid_xml_name(name: str) -> bool:
+    """
+    Whether a tag can be called this, decided by the same XML name rules
+    the engine uses.
+    """
+    if not isinstance(name, str):
+        return False
+    try:
+        return _xmlstreamer.is_xml_name(name.encode("utf-8"))
+    except UnicodeEncodeError:
+        return False
+
+GZIP_MAGIC_NUMBER: bytes = b"\x1f\x8b"
+
+
+class XMLStreamerError(Exception):
+    """Base class for every error this library raises on its own."""
+
+
+class UnsupportedSchemeError(XMLStreamerError, ValueError):
+    """
+    The URL scheme is none of http, https or ftp. The message names the
+    scheme only: a URL can carry credentials.
+    """
+
+
+class FeedInterruptedError(XMLStreamerError):
+    """
+    Stream download mode: the connection died mid-feed. items_delivered
+    counts items already handed out; the network error is __cause__.
+    """
+
+    def __init__(self, items_delivered: int, cause: Exception):
+        self.items_delivered = items_delivered
+        super().__init__(
+            f"feed interrupted after {items_delivered} items: {cause}"
+        )
+
+
+class _StringFields:
+    """Credentials are strings: anything else fails where it is written."""
+
+    def __post_init__(self) -> None:
+        for name in getattr(self, "__dataclass_fields__"):
+            value = getattr(self, name)
+            if not isinstance(value, str):
+                raise TypeError(
+                    f"{type(self).__name__}.{name} must be a str"
+                )
+            # A credential reaches the wire inside a header or an FTP
+            # command: a line break in one would forge a second.
+            if "\n" in value or "\r" in value:
+                raise ValueError(
+                    f"{type(self).__name__}.{name} must not contain line "
+                    "breaks"
+                )
+
+
+def _check_header_value(owner: str, field: str, value: str) -> None:
+    """
+    A value an HTTP header carries verbatim: padding around it is not
+    part of the value (the wire drops it) and latin-1 is all a header
+    can hold. Credentials are exempt: Basic encodes them and FTP sends
+    them as they are.
+    """
+    if value != value.strip():
+        raise ValueError(
+            f"{owner}.{field} goes into a header verbatim, which does "
+            "not carry padding: strip it."
+        )
+    try:
+        value.encode("latin-1")
+    except UnicodeEncodeError:
+        raise ValueError(
+            f"{owner}.{field} must be latin-1: an HTTP header carries "
+            "no other characters."
+        ) from None
+
+
+@dataclasses.dataclass(slots=True)
+class BasicAuth(_StringFields):
+    username: str
+    password: str
+
+
+@dataclasses.dataclass(slots=True)
+class DigestAuth(_StringFields):
+    username: str
+    password: str
+
+
+@dataclasses.dataclass(slots=True)
+class BearerAuth(_StringFields):
+    token: str
+
+    def __post_init__(self) -> None:
+        # dataclass(slots=True) rebuilds the class: a zero-argument
+        # super() points at the original one.
+        _StringFields.__post_init__(self)
+        _check_header_value("BearerAuth", "token", self.token)
+
+
+# An HTTP header name is a token: these are the only bytes it can hold.
+HEADER_TOKEN: re.Pattern = re.compile(r"[!#$%&\'*+\-.^_`|~0-9A-Za-z]+\Z")
+
+
+@dataclasses.dataclass(slots=True)
+class ApiKeyAuth(_StringFields):
+    header: str
+    value: str
+
+    def __post_init__(self) -> None:
+        # dataclass(slots=True) rebuilds the class: a zero-argument
+        # super() points at the original one.
+        _StringFields.__post_init__(self)
+        if HEADER_TOKEN.match(self.header) is None:
+            raise ValueError(
+                "ApiKeyAuth.header must be a header name (a non-empty "
+                "HTTP token), not a phrase."
+            )
+        _check_header_value("ApiKeyAuth", "value", self.value)
+
+
+AuthT = BasicAuth | DigestAuth | BearerAuth | ApiKeyAuth | None
+
+
+def _validate_timeout(timeout: Any) -> None:
+    """A timeout is seconds, or a (connect, read) pair of seconds."""
+    values = timeout if isinstance(timeout, tuple) else (timeout,)
+    if isinstance(timeout, tuple) and len(timeout) != 2:
+        raise ValueError(
+            "timeout as a tuple must be (connect, read) seconds."
+        )
+    for value in values:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(
+                "timeout must be seconds, a (connect, read) pair, or None."
+            )
+        if value <= 0 or value != value or value == float("inf"):
+            raise ValueError(
+                "timeout seconds must be a positive number "
+                "(infinity and NaN never time out)."
+            )
+
+
+@dataclasses.dataclass(slots=True)
+class Transport:
+    """
+    How the feed is reached: identity, credentials, route and download
+    strategy ("temp" spools to a temporary file, "stream" flows straight
+    from the network and can raise FeedInterruptedError mid-iteration).
+    """
+    user_agent: str = USER_AGENT
+    auth: AuthT = None
+    proxy: dict[str, str] | None = None
+    timeout: TimeoutT = DEFAULT_TIMEOUT
+    download_mode: str = "temp"
+
+    def __post_init__(self) -> None:
+        # Checked here, not at the first byte: a bad transport must not
+        # surface as a mid-download failure or an empty run.
+        if self.download_mode not in ("temp", "stream"):
+            raise ValueError(
+                'download_mode must be "temp" (spool to a temporary '
+                'file) or "stream" (no temp file; network errors can '
+                'raise FeedInterruptedError mid-iteration).'
+            )
+        if not isinstance(self.user_agent, str):
+            raise TypeError("user_agent must be a str")
+        if "\n" in self.user_agent or "\r" in self.user_agent:
+            raise ValueError(
+                "user_agent goes into a header verbatim: no line breaks."
+            )
+        _check_header_value("Transport", "user_agent", self.user_agent)
+        if self.auth is not None:
+            if not isinstance(
+                self.auth, (BasicAuth, DigestAuth, BearerAuth, ApiKeyAuth)
+            ):
+                raise TypeError(
+                    "auth must be a BasicAuth, DigestAuth, BearerAuth or "
+                    "ApiKeyAuth instance, or None."
+                )
+        if self.proxy is not None:
+            if not isinstance(self.proxy, dict):
+                raise TypeError(
+                    'proxy must be a dict like '
+                    '{"https": "http://host:port"}, or None.'
+                )
+            for scheme, route in self.proxy.items():
+                if not isinstance(scheme, str) or not isinstance(route, str):
+                    raise TypeError(
+                        "proxy maps scheme strings to route strings"
+                    )
+        if self.timeout is not None:
+            _validate_timeout(self.timeout)
+
+
+def _check_latin1(auth: Any, fields: tuple[str, ...]) -> None:
+    """
+    Credentials that travel literally in an Authorization header,
+    which carries latin-1 and nothing else. The HTTP path only: the
+    same credential over FTP goes out as utf-8.
+    """
+    for field in fields:
+        try:
+            getattr(auth, field).encode("latin-1")
+        except UnicodeEncodeError:
+            raise ValueError(
+                f"{type(auth).__name__}.{field} must be latin-1 over "
+                "HTTP: that is all an Authorization header carries."
+            ) from None
+
+
+def _build_http_auth(auth: AuthT) -> Any | None:
+    """Returns the auth object compatible with requests, or None."""
+    if isinstance(auth, BasicAuth):
+        # Basic encodes both as latin-1 and sends them on the wire.
+        _check_latin1(auth, ("username", "password"))
+        return (auth.username, auth.password)
+    if isinstance(auth, DigestAuth):
+        # Digest hashes the password as utf-8, so it never reaches the
+        # header: only the username travels literally.
+        _check_latin1(auth, ("username",))
+        return requests.auth.HTTPDigestAuth(auth.username, auth.password)
+    return None
+
+
+def _build_http_headers(user_agent: str, auth: AuthT) -> dict:
+    """Builds the headers dict including the authentication header if applicable."""
+    headers = {"User-Agent": user_agent}
+    if isinstance(auth, BearerAuth):
+        headers["Authorization"] = f"Bearer {auth.token}"
+    elif isinstance(auth, ApiKeyAuth):
+        headers[auth.header] = auth.value
+    return headers
+
+
+def stream_gzip_decompress(stream: FeedGeneratorT) -> FeedGeneratorT:
+    """
+    Decompress gzip from an iterable of byte chunks. Handles multi-member
+    files; trailing non-gzip garbage after the last member is tolerated.
+    """
+    # offset 32 to skip the header
+    dec = zlib.decompressobj(wbits=32 + zlib.MAX_WBITS)
+    dec_fed = False
+    member_done = False
+    for chunk in stream:
+        data = bytes(chunk)
+        while data:
+            try:
+                rv = dec.decompress(data)
+            except zlib.error as exc:
+                # Garbage is tolerated only AFTER a whole member: any other
+                # failure cuts the feed short, and never silently. Gzip magic
+                # means a member, however broken.
+                if (dec_fed or not member_done
+                        or data.startswith(GZIP_MAGIC_NUMBER)):
+                    logger.warning(
+                        "Gzip stream is corrupt (%s): everything after "
+                        "this point is lost.", exc
+                    )
+                return
+            dec_fed = True
+            if rv:
+                yield rv
+            if not dec.eof:
+                break
+            data = dec.unused_data
+            dec = zlib.decompressobj(wbits=32 + zlib.MAX_WBITS)
+            dec_fed = False
+            member_done = True
+
+    if dec_fed and not dec.eof:
+        logger.warning(
+            "Gzip stream ended mid-member: the download was likely truncated."
+        )
+
+
+def download_file(
+    url: str,
+    transport: Transport,
+    deadline: float | None = None,
+        ) -> BufferedRandom:
+    """
+    Download file to temporary file.
+    """
+    logger.debug("Downloading file...")
+    f = tempfile.TemporaryFile()
+    try:
+        return _download_into(f, url, transport, deadline)
+    except BaseException:
+        f.close()
+        raise
+
+
+def _ftp_open(
+    url: str,
+    transport: Transport,
+        ):
+    auth = transport.auth
+    proxy = transport.proxy
+    timeout = transport.timeout
+    parsed_url = urlparse(url)
+    if isinstance(auth, (BasicAuth, DigestAuth)):
+        # Percent-encode credentials so reserved chars (@ : / #) can't
+        # break the URL; urllib's FTP handler unquotes them before login.
+        username: str = quote(auth.username, safe="")
+        password: str = quote(auth.password, safe="")
+        ftp_url = urlunparse(parsed_url._replace(
+            netloc=f"{username}:{password}@{parsed_url.hostname}"
+            + (f":{parsed_url.port}" if parsed_url.port else "")
+        ))
+    else:
+        ftp_url = url
+    if proxy:
+        proxy_handler = urllib.request.ProxyHandler(proxy)
+        opener = urllib.request.build_opener(proxy_handler)
+    else:
+        opener = urllib.request.build_opener()
+    # urllib takes a single timeout; use the read component.
+    ftp_timeout = timeout[1] if isinstance(timeout, tuple) else timeout
+    return opener.open(ftp_url, timeout=ftp_timeout)
+
+
+def _copy_within_deadline(
+    source: Any,
+    target: BufferedRandom,
+    deadline: float | None,
+) -> None:
+    """
+    Spool the download, stopping if the run's budget runs out: the
+    budget covers acquiring the feed, not only parsing it. A read
+    already in flight still has to return before the check is reached.
+    """
+    if deadline is None:
+        shutil.copyfileobj(source, target)
+        return
+    while True:
+        if time.monotonic() > deadline:
+            logger.warning(
+                "> XMLStreamer > Time budget exhausted while downloading: "
+                "stopping with what arrived."
+            )
+            return
+        chunk = source.read(STREAM_CHUNK_SIZE)
+        if not chunk:
+            return
+        target.write(chunk)
+
+
+def _download_into(
+    f: BufferedRandom,
+    url: str,
+    transport: Transport,
+    deadline: float | None = None,
+        ) -> BufferedRandom:
+    parsed_url = urlparse(url)
+    if parsed_url.scheme == "ftp":
+        with closing(_ftp_open(url, transport)) as r:
+            _copy_within_deadline(r, f, deadline)
+
+    elif parsed_url.scheme in ["http", "https"]:
+        headers = _build_http_headers(transport.user_agent, transport.auth)
+        http_auth = _build_http_auth(transport.auth)
+        with requests.get(
+            url,
+            stream=True,
+            headers=headers,
+            auth=http_auth,
+            proxies=transport.proxy,
+            timeout=transport.timeout,
+        ) as r:
+            r.raise_for_status()
+            r.raw.decode_content = True
+            _copy_within_deadline(r.raw, f, deadline)
+    else:
+        raise UnsupportedSchemeError(
+            f"unsupported URL scheme {parsed_url.scheme!r}: "
+            "expected http, https or ftp"
+        )
+
+    return f
+
+
+def is_gzip(
+    temp_file: IO[bytes]
+        ) -> bool:
+    temp_file.seek(0)
+    is_gzip_result: bool = temp_file.read(2) == GZIP_MAGIC_NUMBER
+    temp_file.seek(0)
+
+    return is_gzip_result
+
+
+def decode_stream(
+    generator: FeedGeneratorT,
+    encoding: str
+        ) -> FeedGeneratorT:
+    """
+    Transcode a byte stream to utf-8 on the fly: chunk cuts inside a
+    multibyte char are buffered, invalid bytes degrade to U+FFFD.
+    """
+    decoder = codecs.getincrementaldecoder(encoding)(errors="replace")
+    for chunk in generator:
+        decoded_chunk = decoder.decode(chunk, final=False)
+        if decoded_chunk:
+            yield decoded_chunk.encode("utf-8")
+    tail = decoder.decode(b"", final=True)
+    if tail:
+        yield tail.encode("utf-8")
+
+
+PASSTHROUGH_ENCODINGS = {"utf-8", "utf8", "utf-8-sig", "ascii", "us-ascii"}
+
+
+def sample_decodes_as_utf8(sample: bytes) -> bool:
+    """
+    True if the sample is valid utf-8; final=False tolerates a multibyte
+    char cut at the sample boundary.
+    """
+    decoder = codecs.getincrementaldecoder("utf-8")()
+    try:
+        decoder.decode(sample, final=False)
+        return True
+    except UnicodeDecodeError:
+        return False
+
+
+def resolve_stream_encoding(
+    detected_encoding: str | None,
+    sample: bytes,
+        ) -> str | None:
+    """
+    Return the codec for decode_stream, or None for passthrough. A valid
+    utf-8 sample always wins over chardet (which misdetects utf-8 as
+    legacy codecs); chardet only votes on non-utf-8 or NUL-dense samples.
+    """
+    if not sample:
+        return None
+
+    nul_dense: bool = sample.count(0) * 10 >= len(sample)
+    if nul_dense is False and sample_decodes_as_utf8(sample):
+        return None
+
+    if detected_encoding is None:
+        return None
+    if detected_encoding.lower().replace("_", "-") in PASSTHROUGH_ENCODINGS:
+        return None
+    try:
+        codecs.lookup(detected_encoding)
+    except LookupError:
+        # Codec unknown to Python: fall back to utf-8 passthrough.
+        return None
+    return detected_encoding
+
+
+def resolve_sample_encoding(sample: bytes) -> str | None:
+    """
+    Decide the stream codec for a sample. Valid utf-8 resolves to
+    passthrough without ever running chardet; only non-utf-8 or
+    NUL-dense samples pay the detection cost.
+    """
+    if not sample:
+        return None
+    nul_dense: bool = sample.count(0) * 10 >= len(sample)
+    if nul_dense is False and sample_decodes_as_utf8(sample):
+        return None
+    detected_encoding = chardet.detect(sample)["encoding"]
+    logger.debug("Detected encoding: %s", detected_encoding)
+    return resolve_stream_encoding(detected_encoding, sample)
+
+
+def buffered_random_to_generator(
+    buffered_random: IO[bytes],
+    chunk_size: int = STREAM_CHUNK_SIZE
+        ) -> Generator[bytes, None, None]:
+    while True:
+        chunk = buffered_random.read(chunk_size)
+        if not chunk:
+            break
+        yield chunk
+
+
+ENCODING_SAMPLE_SIZE: int = 64 * 1024
+
+
+def read_stream_sample(
+    generator: FeedGeneratorT,
+    sample_size: int = ENCODING_SAMPLE_SIZE
+        ) -> bytes:
+    """
+    Read at least sample_size bytes (chunk granularity), or the whole
+    stream if shorter.
+    """
+    sample: bytes = b""
+    try:
+        while len(sample) < sample_size:
+            sample += next(generator)
+    except StopIteration:
+        ...
+    return sample
+
+
+def _owned_generator(
+    feed_generator: FeedGeneratorT,
+    closer: Callable[[], Any],
+        ) -> FeedGeneratorT:
+    """
+    Run closer() when the generator is exhausted, closed or errors out.
+    Primed past a sentinel yield so close() reaches the finally even if
+    the consumer never pulled a chunk.
+    """
+    def owned() -> FeedGeneratorT:
+        try:
+            yield b""
+            yield from feed_generator
+        finally:
+            closer()
+
+    generator = owned()
+    next(generator)
+    return generator
+
+
+def _past_deadline(deadline: float | None, stage: str) -> bool:
+    """The run's budget applies while acquiring the feed too."""
+    if deadline is not None and time.monotonic() > deadline:
+        logger.warning(
+            "> XMLStreamer > Time budget exhausted while %s: stopping.",
+            stage,
+        )
+        return True
+    return False
+
+
+def _feed_generator_from_chunks(
+    raw_chunks: Iterable[bytes],
+    closer: Callable[[], Any],
+    deadline: float | None = None,
+        ) -> FeedGeneratorT:
+    """
+    Feed generator over a one-way chunk iterator: gzip and encoding
+    detection peek the head and re-emit it, since there is nothing to
+    seek back. Worst case one encoding sample is held in memory.
+    """
+    try:
+        head = b""
+        for chunk in raw_chunks:
+            head += chunk
+            if len(head) >= 2 or _past_deadline(deadline, "reading the head"):
+                break
+        is_gzip_result: bool = head[:2] == b"\x1f\x8b"
+        logger.debug("Is gzip: %s", is_gzip_result)
+
+        def chained() -> FeedGeneratorT:
+            if head:
+                yield head
+            yield from raw_chunks
+
+        if is_gzip_result is True:
+            decompressed = stream_gzip_decompress(stream=chained())
+        else:
+            decompressed = chained()
+
+        sampled = []
+        sampled_size = 0
+        for chunk in decompressed:
+            sampled.append(chunk)
+            sampled_size += len(chunk)
+            if sampled_size >= ENCODING_SAMPLE_SIZE\
+                    or _past_deadline(deadline, "sampling the encoding"):
+                break
+        first_sample: bytes = b"".join(sampled)
+        stream_encoding: str | None = resolve_sample_encoding(
+            first_sample
+        )
+        logger.debug(
+            "Stream transcoding: %s", stream_encoding or "not needed (utf-8)"
+        )
+
+        def replayed() -> FeedGeneratorT:
+            yield from sampled
+            yield from decompressed
+
+        feed_generator = replayed()
+        if stream_encoding is not None:
+            feed_generator = decode_stream(
+                feed_generator,
+                stream_encoding
+            )
+    except BaseException:
+        closer()
+        raise
+
+    return _owned_generator(feed_generator, closer)
+
+
+def _stream_feed_generator(
+    url: str,
+    transport: Transport,
+    deadline: float | None = None,
+        ) -> FeedGeneratorT:
+    """
+    Feed generator without a temp file: gzip and encoding detection peek
+    the stream head and re-emit it, since there is nothing to seek back.
+    """
+    parsed_url = urlparse(url)
+    if parsed_url.scheme == "ftp":
+        response = _ftp_open(url, transport)
+        raw_chunks = iter(lambda: response.read(STREAM_CHUNK_SIZE), b"")
+        closer = response.close
+    elif parsed_url.scheme in ["http", "https"]:
+        response = requests.get(
+            url,
+            stream=True,
+            headers=_build_http_headers(transport.user_agent, transport.auth),
+            auth=_build_http_auth(transport.auth),
+            proxies=transport.proxy,
+            timeout=transport.timeout,
+        )
+        closer = response.close
+        try:
+            response.raise_for_status()
+        except BaseException:
+            closer()
+            raise
+        raw_chunks = response.iter_content(chunk_size=STREAM_CHUNK_SIZE)
+    else:
+        raise UnsupportedSchemeError(
+            f"unsupported URL scheme {parsed_url.scheme!r}: "
+            "expected http, https or ftp"
+        )
+
+    return _feed_generator_from_chunks(
+        raw_chunks=raw_chunks, closer=closer, deadline=deadline
+    )
+
+
+def _feed_generator_from_file(
+    f: IO[bytes],
+    closer: Callable[[], Any],
+        ) -> FeedGeneratorT:
+    """
+    Feed generator over a seekable binary file: the gzip check and the
+    encoding sample rewind with seek, nothing is held in memory.
+    """
+    f.seek(0)
+    is_gzip_result: bool = is_gzip(temp_file=f)
+    logger.debug("Is gzip: %s", is_gzip_result)
+
+    def build_feed_generator() -> FeedGeneratorT:
+        f.seek(0)
+        if is_gzip_result is True:
+            # Fixed-size chunks; iterating a binary file splits on \n bytes.
+            return stream_gzip_decompress(
+                stream=buffered_random_to_generator(buffered_random=f)
+            )
+        return buffered_random_to_generator(buffered_random=f)
+
+    # Encoding detection runs on BOTH paths (gzip and plain): a plain
+    # UTF-16 feed is otherwise invisible to the ASCII tag regexes.
+    first_sample: bytes = read_stream_sample(
+        generator=build_feed_generator()
+    )
+    stream_encoding: str | None = resolve_sample_encoding(first_sample)
+    logger.debug(
+        "Stream transcoding: %s", stream_encoding or "not needed (utf-8)"
+    )
+
+    # Restart the generator because the sample consumed part of it.
+    feed_generator = build_feed_generator()
+    if stream_encoding is not None:
+        feed_generator = decode_stream(
+            feed_generator,
+            stream_encoding
+        )
+
+    return _owned_generator(feed_generator, closer)
+
+
+def get_feed_generator(
+    url: str,
+    transport: Transport,
+    deadline: float | None = None,
+        ) -> FeedGeneratorT:
+    if transport.download_mode == "stream":
+        return _stream_feed_generator(
+            url=url, transport=transport, deadline=deadline
+        )
+
+    temp_file: BufferedRandom = download_file(
+        url=url, transport=transport, deadline=deadline
+    )
+    return _feed_generator_from_file(temp_file, temp_file.close)
+
+
+def get_source_feed_generator(
+    source: SourceT,
+    deadline: float | None = None,
+        ) -> FeedGeneratorT:
+    """
+    Feed generator for a local source. A path is opened, read through
+    the seek-based pipeline and closed by the run. A file-like object
+    is read once through the peeked pipeline and never closed here:
+    the run closes what it opens, a caller's object stays the caller's.
+    """
+    if isinstance(source, (str, os.PathLike)):
+        f = open(source, "rb")
+        try:
+            return _feed_generator_from_file(f, f.close)
+        except BaseException:
+            f.close()
+            raise
+
+    # read1 (when the object offers it) returns what already arrived
+    # instead of blocking until a full chunk: what a pipe needs.
+    read = getattr(source, "read1", source.read)
+    raw_chunks = iter(lambda: read(STREAM_CHUNK_SIZE), b"")
+    return _feed_generator_from_chunks(
+        raw_chunks=raw_chunks,
+        # Not the object's close: it was not opened here.
+        closer=lambda: None,
+        deadline=deadline,
+    )
+
+
+def sanitize_item_bytes(item_string: bytes) -> tuple:
+    """
+    Return (bytes fit for the parser, whether invalid bytes were replaced).
+    Fast path: already-valid utf-8 goes through untouched; only invalid
+    bytes pay the decode/re-encode round trip, and say so.
+    """
+    try:
+        item_string.decode("utf-8")
+        return item_string, False
+    except UnicodeDecodeError:
+        return item_string.decode("utf-8", "replace").encode(), True
+
+
+def parse_item(item_string: bytes) -> dict[str, Any] | None:
+    decoded_string, _ = sanitize_item_bytes(item_string)
+    return parse_sanitized_item(decoded_string)
+
+
+def parse_sanitized_item(decoded_string: bytes) -> dict[str, Any] | None:
+    # The per-item parse runs in the Rust engine (rypipe/quick scan), in
+    # isolation, exactly as the fresh expat parser used to. Malformed bytes
+    # invalidate this item alone; nothing else is ever seen by the parse.
+    parsed, collisions = _xmlstreamer.parse_document(decoded_string)
+    for taken, tag, key in collisions:
+        logger.warning(
+            "Key collision on %r: <%s> numbered as %r instead. A field "
+            "named like a numbered sibling makes the shape ambiguous.",
+            taken, tag, key,
+        )
+    if parsed is None:
+        logger.warning(
+            "Discarding unparseable item (%s): %r",
+            "malformed XML",
+            decoded_string[:120],
+        )
+        return None
+    return parsed
+
+
+NESTED_TEXT_KEY = "#text"
+
+NUMBERED_SEGMENT_RE = re.compile(r"^(.+)_\d+$")
+
+
+@dataclasses.dataclass(slots=True)
+class Nested:
+    """
+    Output mode for StreamInterpreter: emit each item re-shaped with
+    to_nested, forwarding force_list.
+    """
+    force_list: bool | Iterable[str] | None = None
+
+    def __post_init__(self) -> None:
+        # Frozen here: a generator is spent on the first item and
+        # reshapes every one after it.
+        if self.force_list is None or isinstance(self.force_list, bool):
+            return
+        if isinstance(self.force_list, str):
+            self.force_list = frozenset({self.force_list})
+            return
+        try:
+            paths = frozenset(self.force_list)
+        except TypeError:
+            raise TypeError(
+                "force_list must be True, a path string, or an iterable "
+                "of path strings."
+            ) from None
+        if not all(isinstance(path, str) for path in paths):
+            raise TypeError("force_list paths must be strings.")
+        self.force_list = paths
+
+
+@dataclasses.dataclass(slots=True)
+class Raw:
+    """
+    Output mode for StreamInterpreter: deliver each item as bytes
+    instead of a parsed dict - the slice between its separator tags,
+    exactly as the parser would receive it: after transparent gunzip
+    and stream-to-utf-8 normalization, before any per-item repair,
+    never re-serialized. The selection is unchanged: an item that
+    does not parse is dropped.
+    """
+
+
+def to_nested(
+    item: dict[str, Any],
+    force_list: bool | Iterable[str] | None = None,
+        ) -> dict[str, Any]:
+    """
+    Re-shape a flat {path: text} item into nested dicts (split on "/").
+    Numbered siblings stay numbered, mixed-content text goes under
+    "#text", and force_list paths ALWAYS come out as lists, in document
+    order (force_list=True declares every path: all-lists shape).
+    """
+    declared_all = force_list is True
+    if isinstance(force_list, str):
+        # A lone string is one path, not an iterable of characters.
+        force_list = {force_list}
+    declared = (
+        set(force_list)
+        if force_list and force_list is not True
+        else set()
+    )
+    nested: dict[str, Any] = {}
+    seen_segments: dict[tuple, set] = {}
+    list_elements: dict[tuple, dict[str, Any]] = {}
+
+    def base_of(segment: str, level: tuple) -> str:
+        # Numbered only if the unnumbered base was seen as a sibling.
+        match = NUMBERED_SEGMENT_RE.match(segment)
+        if match and match.group(1) in seen_segments.get(level, set()):
+            return match.group(1)
+        seen_segments.setdefault(level, set()).add(segment)
+        return segment
+
+    for path, value in item.items():
+        segments = path.split("/")
+        node = nested
+        inst_prefix: tuple = ()
+        base_prefix: tuple = ()
+        for segment in segments[:-1]:
+            base_segment = base_of(segment, base_prefix)
+            inst_prefix += (segment,)
+            base_prefix += (base_segment,)
+            if declared_all or "/".join(base_prefix) in declared:
+                elements = node.setdefault(base_segment, [])
+                element = list_elements.get(inst_prefix)
+                if element is None:
+                    element = {}
+                    list_elements[inst_prefix] = element
+                    elements.append(element)
+                node = element
+            else:
+                child = node.get(segment)
+                if not isinstance(child, dict):
+                    # Node already had direct text: it moves under #text.
+                    child = {} if child is None else {NESTED_TEXT_KEY: child}
+                    node[segment] = child
+                node = child
+        leaf = segments[-1]
+        base_leaf = base_of(leaf, base_prefix)
+        if declared_all or "/".join(base_prefix + (base_leaf,)) in declared:
+            element = list_elements.get(inst_prefix + (leaf,))
+            if element is not None:
+                # Instance already created by its children: text -> #text.
+                element[NESTED_TEXT_KEY] = value
+            else:
+                node.setdefault(base_leaf, []).append(value)
+        else:
+            existing = node.get(leaf)
+            if isinstance(existing, dict):
+                existing[NESTED_TEXT_KEY] = value
+            else:
+                node[leaf] = value
+    return nested
+
+
+# Hot path (one object per item): do not add runtime validation here.
+@dataclasses.dataclass(slots=True)
+class ParsedItem:
+    content: bytes = b""
+    parsed_content: dict[str, Any] | None = None
+    # True when invalid utf-8 had to be replaced to parse this item.
+    replaced: bool = False
+
+    def parse_content(
+        self,
+        wrapper_open: bytes = b"<item>",
+        wrapper_close: bytes = b"</item>",
+    ) -> None:
+        # The wrapper carries the feed's own separator name, so an item
+        # made of bare text is keyed by the tag the feed really uses.
+        decoded, self.replaced = sanitize_item_bytes(
+            wrapper_open + self.content + wrapper_close
+        )
+        self.parsed_content: dict[str, Any] | None = parse_sanitized_item(
+            decoded
+        )
+
+
+class ParsingState(Enum):
+    SEEK_OPEN = "seek_open"
+    SEEK_CLOSE = "seek_close"
+    ITEM_PARSED = "item_parsed"
+    EOF = "EOF"
+
+
+# How long the scanner waits before deciding a section never was
+# one. Generous: any real section closes well inside it. The Rust
+# scanner itself lives in native/src/tokenizer.rs.
+MAX_SECTION_SIZE: int = 16 * 1024 * 1024
+
+
+# XML 1.0 names, spelled out in full.
+_NAME_START: str = (
+    ":A-Z_a-z\u00c0-\u00d6\u00d8-\u00f6\u00f8-\u02ff\u0370-\u037d"
+    "\u037f-\u1fff\u200c-\u200d\u2070-\u218f\u2c00-\u2fef"
+    "\u3001-\ud7ff\uf900-\ufdcf\ufdf0-\ufffd\U00010000-\U000effff"
+)
+_NAME_REST: str = (
+    _NAME_START + "0-9\u00b7\u0300-\u036f\u203f-\u2040."
+)
+XML_NAME_SHAPE: re.Pattern = re.compile(
+    f"[{_NAME_START}][{_NAME_REST}\\-]*\\Z"
+)
+
+
+def is_xml_name(raw: bytes) -> bool:
+    """Whether these bytes spell a name XML would accept."""
+    if not raw:
+        return False
+    try:
+        name = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    return XML_NAME_SHAPE.match(name) is not None
+
+
+# XML 1.0 Char: everything a document may contain, and nothing else.
+XML_CHAR_FORBIDDEN: re.Pattern = re.compile(
+    "[^\x09\x0a\x0d\x20-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]"
+)
+
+
+def is_xml_char(code: int) -> bool:
+    """Whether a code point is one XML allows at all."""
+    return (
+        code in (0x9, 0xA, 0xD)
+        or 0x20 <= code <= 0xD7FF
+        or 0xE000 <= code <= 0xFFFD
+        or 0x10000 <= code <= 0x10FFFF
+    )
+
+
+# XML spells a numeric reference in ASCII digits only: every other
+# digit-like character is not one, however Python classifies it.
+DECIMAL_DIGITS: str = "0123456789"
+HEX_DIGITS: str = "0123456789abcdefABCDEF"
+
+
+def char_ref_code(digits: str, base: int) -> int:
+    """
+    The code point a numeric character reference names, or -1 when it
+    names none. Accumulated digit by digit and given up past the last
+    code point, so a reference of any length costs a few operations and
+    never builds a huge integer out of feed bytes.
+    """
+    if not digits:
+        return -1
+    allowed: str = HEX_DIGITS if base == 16 else DECIMAL_DIGITS
+    code: int = 0
+    for char in digits:
+        if char not in allowed:
+            return -1
+        code = code * base + int(char, base)
+        if code > 0x10FFFF:
+            return -1
+    return code
+
+
+def attvalue_is_well_formed(value: bytes) -> bool:
+    """
+    An attribute value is utf-8, holds no "<", carries only characters
+    XML allows, and every "&" opens a reference that resolves to one:
+    &name;, &#digits; or &#xhex;.
+    """
+    if b"<" in value:
+        return False
+    try:
+        text = value.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    if XML_CHAR_FORBIDDEN.search(text) is not None:
+        return False
+    pos: int = 0
+    while True:
+        amp: int = text.find("&", pos)
+        if amp == -1:
+            return True
+        semicolon: int = text.find(";", amp + 1)
+        if semicolon == -1:
+            return False
+        body: str = text[amp + 1:semicolon]
+        if body[:2] == "#x":
+            if not is_xml_char(char_ref_code(body[2:], 16)):
+                return False
+        elif body[:1] == "#":
+            if not is_xml_char(char_ref_code(body[1:], 10)):
+                return False
+        elif not is_xml_name(body.encode()):
+            return False
+        pos = semicolon + 1
+
+
+@dataclasses.dataclass(slots=True)
+class Sections:
+    """
+    What the scanner does with a markup section (comment, CDATA,
+    processing instruction, DOCTYPE) that never closes. Past max_size,
+    "text" re-reads the opener as content (bounded damage) and "markup"
+    keeps discarding it (never a record, at the price of the rest).
+    """
+    max_size: int = MAX_SECTION_SIZE
+    on_limit: str = "text"
+
+    def __post_init__(self) -> None:
+        if isinstance(self.max_size, bool)\
+                or not isinstance(self.max_size, int):
+            raise TypeError("max_size must be an int")
+        if self.max_size <= 0:
+            raise ValueError("max_size must be positive")
+        if self.on_limit not in ("text", "markup"):
+            raise ValueError(
+                'on_limit must be "text" (past max_size the opener '
+                'was not markup after all: it is re-read as content) or '
+                '"markup" (keep discarding it, whatever follows).'
+            )
+
+
+
+
+class Tokenizer:
+    """
+    The byte layer, now the Rust engine: it scans the stream for the
+    separator tags, skips markup sections, cuts out one item's bytes and
+    parses it in isolation. This Python class is the thin configuration
+    and stats surface: it feeds the generator's chunks in and turns the
+    engine's results into ParsedItem objects.
+    """
+
+    def __init__(
+        self,
+        feed_generator: FeedGeneratorT,
+        separator_tag: str,
+        buffer_size: int,
+        sections: Sections | None = None,
+        deadline: float | None = None,
+    ) -> None:
+        if not isinstance(feed_generator, collections.abc.Generator):
+            raise TypeError("feed_generator must be a generator")
+        if not isinstance(separator_tag, str):
+            raise TypeError("separator_tag must be a str")
+        if not is_valid_xml_name(separator_tag):
+            raise ValueError(
+                f"separator_tag {separator_tag!r} is not a name an "
+                "XML tag can have"
+            )
+        if isinstance(buffer_size, bool) or not isinstance(buffer_size, int):
+            raise TypeError("buffer_size must be an int")
+        if buffer_size <= 0:
+            raise ValueError("buffer_size must be positive")
+        if sections is None:
+            sections = Sections()
+        if not isinstance(sections, Sections):
+            raise TypeError("sections must be a Sections(...) instance")
+        if deadline is not None:
+            if isinstance(deadline, bool)\
+                    or not isinstance(deadline, (int, float)):
+                raise TypeError(
+                    "deadline must be a monotonic instant, or None"
+                )
+
+        self.feed_generator = feed_generator
+        self.separator_tag = separator_tag
+        self.buffer_size = buffer_size
+        self.sections = sections
+        remaining = (
+            None if deadline is None else max(0.0, deadline - time.monotonic())
+        )
+        # The rypipe `RecordStream` driver over the xmlstreamer scanner. The
+        # warnings are already formatted in Rust; Python only logs them.
+        self._engine = _xmlstreamer.RecordStream(
+            separator_tag,
+            buffer_size,
+            sections.max_size,
+            sections.on_limit == "text",
+            remaining,
+        )
+        self.PARSING_STATE = ParsingState.SEEK_OPEN
+        self.actual_item: ParsedItem = ParsedItem()
+
+    @property
+    def MALFORMED_TAGS(self) -> int:
+        return self._engine.malformed_tags()
+
+    def _log_engine_events(self) -> None:
+        # Warnings are rare; skip the list allocation on the common path.
+        if not self._engine.has_logs():
+            return
+        for _code, message in self._engine.take_logs():
+            # The messages are formatted in Rust to match the historical
+            # Python warnings byte for byte.
+            logger.warning("%s", message)
+
+    def get_item(self) -> ParsedItem | None:
+        while True:
+            code, payload = self._engine.next_item()
+            self._log_engine_events()
+
+            if code == 0:  # EOF
+                self.PARSING_STATE = ParsingState.EOF
+                return None
+
+            if code == 1:  # the engine needs more bytes
+                # Read ahead like the historical tokenizer: hand over at
+                # least one chunk and keep going until buffer_size bytes have
+                # been fed, so a small generator chunk never changes what
+                # comes out.
+                fed = 0
+                first = True
+                while first or fed < self.buffer_size:
+                    first = False
+                    try:
+                        chunk = next(self.feed_generator)
+                    except StopIteration:
+                        self._engine.finish()
+                        break
+                    self._engine.feed(chunk)
+                    fed += len(chunk)
+                continue
+
+            content, parsed, replaced, collisions = payload
+            for taken, tag, key in collisions:
+                logger.warning(
+                    "Key collision on %r: <%s> numbered as %r instead. A "
+                    "field named like a numbered sibling makes the shape "
+                    "ambiguous.",
+                    taken, tag, key,
+                )
+            if parsed is None:
+                wrapper = f"<{self.separator_tag}>".encode()
+                closing = f"</{self.separator_tag}>".encode()
+                logger.warning(
+                    "Discarding unparseable item (%s): %r",
+                    "malformed XML",
+                    (wrapper + bytes(content) + closing)[:120],
+                )
+            self.actual_item = ParsedItem(
+                content=bytes(content),
+                parsed_content=parsed,
+                replaced=replaced,
+            )
+            return self.actual_item
+
+
+class FeedRun(Generic[ItemT]):
+    """
+    One pass over one feed: its own source, tokenizer, counters and
+    time budget. Iterating a StreamInterpreter opens one; runs of the
+    same interpreter share nothing, so nested loops, retries and one
+    interpreter per thread are all ordinary code.
+    """
+
+    def __init__(
+        self,
+        interpreter: "StreamInterpreter[ItemT]",
+        tokenizer: Tokenizer,
+        budget_start: float,
+        budget: float | None,
+    ) -> None:
+        self.interpreter = interpreter
+        self.tokenizer = tokenizer
+        self.start_date = datetime.now()
+        # Budget and clock are the run's own, taken when it opened. The
+        # clock starts before acquisition: a slow download spends it.
+        self._budget_start: float = budget_start
+        self._budget: float | None = budget
+        # What the run needed to open itself is fixed here; what it
+        # applies per item (filter, output shape) is read when applied.
+        self._stream_mode: bool = (
+            interpreter.TRANSPORT.download_mode == "stream"
+        )
+        self._finished: bool = False
+        # The funnel: total >= parsed >= delivered. total-parsed is
+        # damage in the FEED, parsed-delivered the CALLER's filter.
+        self.stats_total_items: int = 0
+        self.stats_parsed_items: int = 0
+        self.stats_delivered_items: int = 0
+        # Items whose invalid utf-8 had to be replaced (encoding missed).
+        self._replaced_items: int = 0
+
+    def __iter__(self) -> Self:
+        return self
+
+    def check_terminate(self) -> bool:
+        """Whether this run has spent its share of the time budget."""
+        budget: float | None = self._budget
+        if budget is None:
+            return False
+        running_time: float = time.monotonic() - self._budget_start
+        if running_time > budget:
+            logger.warning(
+                "> XMLStreamer > Running time exceeded: %.1fs", running_time
+            )
+            return True
+        return False
+
+    def __next__(self) -> ItemT:
+        if self._finished:
+            raise StopIteration
+        if self.check_terminate() is True:
+            logger.warning("> XMLStreamer > Get item (RUNTIME EXCEEDED)")
+            self.finish()
+
+        if not self._stream_mode:
+            return self.get_item()
+
+        try:
+            return self.get_item()
+        except (requests.exceptions.RequestException, OSError) as exc:
+            raise FeedInterruptedError(
+                self.stats_delivered_items, exc
+            ) from exc
+
+    def close(self) -> None:
+        """
+        End the run, however far it got: release its source (socket or
+        temp file), report the funnel and notify the interpreter. A run
+        ends once, and a closed one is over: it delivers nothing more,
+        whatever its buffer still held.
+        """
+        if self._finished:
+            return
+        self._finished = True
+        # A generator that raises on close is closed all the same, so
+        # reporting is not skipped and the error still surfaces.
+        try:
+            self.tokenizer.feed_generator.close()
+        finally:
+            self.interpreter.forget_run(self)
+            logger.info(
+                "XMLStreamer stats: total=%s parsed=%s delivered=%s%s%s",
+                self.stats_total_items,
+                self.stats_parsed_items,
+                self.stats_delivered_items,
+                f" replaced={self._replaced_items}"
+                if self._replaced_items else "",
+                f" malformed={self.tokenizer.MALFORMED_TAGS}"
+                if self.tokenizer.MALFORMED_TAGS else "",
+            )
+            try:
+                self.interpreter.run_finished(self)
+            except Exception:
+                # The hook reports: a report that fails is logged, never
+                # propagated. Exception, not BaseException: a cancellation
+                # is not a failed report.
+                logger.error(
+                    "run_finished(run) raised: the run ended anyway.",
+                    exc_info=True,
+                )
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        self.close()
+
+    def finish(self) -> NoReturn:
+        """End the run and end the iteration with it."""
+        self.close()
+        raise StopIteration
+
+    def get_item(self) -> ItemT:
+        interpreter = self.interpreter
+        # The end is re-read after anything that reaches caller code
+        # (the scan and its logging, the filter): once a run is over,
+        # no counter moves again.
+        while not self._finished\
+                and self.tokenizer.PARSING_STATE != ParsingState.EOF:
+            # Checked here too: a filter that drops everything never
+            # reaches __next__, and the budget must still hold.
+            if self.check_terminate() is True:
+                self.finish()
+
+            item: ParsedItem | None = self.tokenizer.get_item()
+            if self._finished:
+                break  # closed from inside the scan
+
+            if item is not None:
+                self.stats_total_items += 1
+                if item.parsed_content is not None:
+                    self.stats_parsed_items += 1
+                if item.replaced:
+                    self._replaced_items += 1
+                    if self._replaced_items == 1:
+                        # Counted before warning: this line reaches
+                        # caller code, which can close the run from it.
+                        logger.warning(
+                            "Invalid utf-8 in the feed: those bytes are "
+                            "replaced with U+FFFD. The encoding detected "
+                            "from the head of the feed does not match "
+                            "what arrived later."
+                        )
+                        if self._finished:
+                            break
+
+            if item is not None and item.parsed_content is not None:
+                if interpreter.ITEM_FILTER is None\
+                        or interpreter.ITEM_FILTER(item.parsed_content):
+                    if self._finished:
+                        break  # the filter closed the run: nothing more
+                    self.stats_delivered_items += 1
+                    # Representation runs AFTER the filter (filters see
+                    # the flat dict in every output mode). The casts
+                    # state what the __init__ overloads pinned: Raw
+                    # yields bytes, everything else dicts.
+                    if isinstance(interpreter.OUTPUT, Raw):
+                        return cast(ItemT, item.content)
+                    if interpreter.OUTPUT is not None:
+                        return cast(ItemT, to_nested(
+                            item.parsed_content,
+                            interpreter.OUTPUT.force_list
+                        ))
+                    return cast(ItemT, item.parsed_content)
+
+        self.finish()
+
+
+class StreamInterpreter(Generic[ItemT]):
+    # The overloads pin ItemT to what a run will yield, decided by
+    # output=. Signatures must mirror the implementation below.
+    @overload
+    def __init__(
+        self: "StreamInterpreter[dict[str, Any]]",
+        url: str | None = None,
+        separator_tag: str | None = None,
+        item_filter: ItemFilterT = None,
+        buffer_size: int = 1024 * 128,
+        max_running_time: float | None = None,
+        output: Nested | None = None,
+        transport: Transport | None = None,
+        sections: Sections | None = None,
+        source: SourceT | None = None,
+            ) -> None: ...
+
+    @overload
+    def __init__(
+        self: "StreamInterpreter[bytes]",
+        url: str | None = None,
+        separator_tag: str | None = None,
+        item_filter: ItemFilterT = None,
+        buffer_size: int = 1024 * 128,
+        max_running_time: float | None = None,
+        output: Raw = ...,
+        transport: Transport | None = None,
+        sections: Sections | None = None,
+        source: SourceT | None = None,
+            ) -> None: ...
+
+    def __init__(
+        self,
+        url: str | None = None,
+        separator_tag: str | None = None,
+        item_filter: ItemFilterT = None,
+        buffer_size: int = 1024 * 128,  # 128Kb
+        max_running_time: float | None = None,
+        output: Nested | Raw | None = None,
+        transport: Transport | None = None,
+        sections: Sections | None = None,
+        source: SourceT | None = None,
+            ) -> None:
+        # Every argument is checked here, at the call site, so a bad
+        # value can never fail mid-iteration or yield zero items.
+        if (url is None) == (source is None):
+            raise ValueError(
+                "pass exactly one of url or source: url reaches the "
+                "network, source is a local path or a binary file-like "
+                "object."
+            )
+        if url is not None and not isinstance(url, str):
+            raise TypeError("url must be a str")
+        if source is not None and not isinstance(source, (str, os.PathLike)):
+            if isinstance(source, io.TextIOBase):
+                raise TypeError(
+                    "source must be binary: open the file with 'rb' "
+                    "(text mode yields str, the tokenizer reads bytes)."
+                )
+            if not callable(getattr(source, "read", None)):
+                raise TypeError(
+                    "source must be a filesystem path or a binary "
+                    "file-like object with a read() method."
+                )
+        if not isinstance(separator_tag, str):
+            raise TypeError("separator_tag must be a str")
+        if not separator_tag.strip():
+            raise ValueError(
+                "separator_tag must be a non-empty tag name: an empty "
+                "separator can never match an item."
+            )
+        if not is_valid_xml_name(separator_tag):
+            raise ValueError(
+                f"separator_tag {separator_tag!r} is not a name an XML "
+                "tag can have: it would match nothing and deliver zero "
+                "items."
+            )
+        if isinstance(buffer_size, bool) or not isinstance(buffer_size, int):
+            raise TypeError("buffer_size must be an int")
+        if buffer_size <= 0:
+            raise ValueError("buffer_size must be positive")
+        if max_running_time is not None:
+            if isinstance(max_running_time, bool)\
+                    or not isinstance(max_running_time, (int, float)):
+                raise TypeError(
+                    "max_running_time must be a number of seconds, or "
+                    "None for no time budget."
+                )
+            # NaN passes every comparison below (and infinity means no
+            # budget at all): both would make it silently unreachable.
+            if max_running_time != max_running_time\
+                    or max_running_time == float("inf")\
+                    or max_running_time <= 0:
+                raise ValueError(
+                    "max_running_time must be a positive number of "
+                    "seconds, or None for no time budget."
+                )
+        if output is not None and not isinstance(output, (Nested, Raw)):
+            raise TypeError(
+                "output must be a Nested(...) or Raw() instance, or "
+                "None for the default flat items."
+            )
+        if transport is not None and not isinstance(transport, Transport):
+            raise TypeError(
+                "transport must be a Transport(...) instance, or None "
+                "for the defaults."
+            )
+        if transport is not None and source is not None:
+            raise ValueError(
+                "transport configures how a url is reached (agent, "
+                "auth, proxy, timeout, download mode): it does not "
+                "apply to a local source."
+            )
+        if sections is not None and not isinstance(sections, Sections):
+            raise TypeError(
+                "sections must be a Sections(...) instance, or None for "
+                "the defaults."
+            )
+        if item_filter is not None and not callable(item_filter):
+            raise TypeError(
+                "item_filter must be a callable taking the flat item "
+                "dict and returning a truthy value to keep it, or None."
+            )
+
+        self.BUFFER_SIZE = buffer_size
+        self.URL: str | None = url
+        self.SOURCE: SourceT | None = source
+        self.separator_tag = separator_tag
+        self.MAX_RUNNING_TIME = max_running_time
+        self.OUTPUT = output
+        self.TRANSPORT = transport if transport is not None else Transport()
+        self.SECTIONS = sections if sections is not None else Sections()
+
+        # Internal.
+        self.ITEM_FILTER = item_filter
+
+        # Wall clock for consumers to read; each run measures its own
+        # budget on a monotonic clock, immune to NTP steps and DST.
+        self.start_date = datetime.now()
+
+        # Runs still holding a source, so close() can release them all,
+        # and the guard that keeps that set from growing while it does.
+        self._open_runs: "weakref.WeakSet[FeedRun[ItemT]]" = weakref.WeakSet()
+        self._closing: bool = False
+        # A caller's file-like object is consumed by its first run;
+        # a url or a path is reopened instead.
+        self._source_consumed: bool = False
+        # The last run opened by iterating this interpreter, if any.
+        # Counters live on the run; the properties below answer for it.
+        self.last_run: FeedRun[ItemT] | None = None
+
+    def __iter__(self) -> "FeedRun[ItemT]":
+        """Open a run: its own source, tokenizer and counters."""
+        if self._closing:
+            # Reachable from an end-of-run hook: a teardown hands out no
+            # new sources. Retry from the caller's loop.
+            raise RuntimeError(
+                "cannot open a run while the interpreter is closing"
+            )
+        self.start_date = datetime.now()
+        budget_start: float = time.monotonic()
+        deadline: float | None = (
+            None if self.MAX_RUNNING_TIME is None
+            else budget_start + self.MAX_RUNNING_TIME
+        )
+        # Acquisition happens here, so a feed that cannot be reached
+        # fails where callers already expect it to.
+        if self.SOURCE is None:
+            # __init__ enforced exactly one of url/source: no source
+            # here means url is a str.
+            feed_generator = get_feed_generator(
+                url=cast(str, self.URL),
+                transport=self.TRANSPORT,
+                deadline=deadline,
+            )
+        else:
+            if not isinstance(self.SOURCE, (str, os.PathLike)):
+                if self._source_consumed:
+                    raise RuntimeError(
+                        "a file-like source cannot be re-read: pass a "
+                        "path or a fresh object."
+                    )
+                # Marked before reading: a failed acquisition may have
+                # drained part of the object already.
+                self._source_consumed = True
+            feed_generator = get_source_feed_generator(
+                source=self.SOURCE,
+                deadline=deadline,
+            )
+        tokenizer = Tokenizer(
+            feed_generator=feed_generator,
+            separator_tag=self.separator_tag,
+            buffer_size=self.BUFFER_SIZE,
+            sections=self.SECTIONS,
+            deadline=deadline,
+        )
+        run = FeedRun(self, tokenizer, budget_start, self.MAX_RUNNING_TIME)
+        self.last_run = run
+        self._open_runs.add(run)
+        return run
+
+    @property
+    def stats_total_items(self) -> int:
+        """Items the last run cut out of the stream."""
+        return self.last_run.stats_total_items if self.last_run else 0
+
+    @property
+    def stats_parsed_items(self) -> int:
+        """Of those, the ones the engine could parse."""
+        return self.last_run.stats_parsed_items if self.last_run else 0
+
+    @property
+    def stats_delivered_items(self) -> int:
+        """Of those, the ones the filter kept and the caller received."""
+        return self.last_run.stats_delivered_items if self.last_run else 0
+
+    def forget_run(self, run: "FeedRun[ItemT]") -> None:
+        """A run that released its source is no longer this one's to close."""
+        self._open_runs.discard(run)
+
+    def close(self) -> None:
+        """Release every run this interpreter still has open."""
+        if self._closing:
+            # A sweep already owns this teardown: a nested close() recurses
+            # per run and hides another source's failure inside a hook.
+            return
+        failures: list[BaseException] = []
+        cancellation: BaseException | None = None
+        # Held for the whole sweep: only one snapshot is taken, so
+        # the set must not grow behind it.
+        self._closing = True
+        try:
+            for run in list(self._open_runs):
+                try:
+                    run.close()
+                except Exception as exc:
+                    # One source that will not release must not strand
+                    # the others: collect it and keep sweeping.
+                    failures.append(exc)
+                except BaseException as exc:
+                    # Ctrl-C or SystemExit: deferred, never
+                    # absorbed. What is left is bounded work, and it
+                    # is re-raised below ahead of any mere failure.
+                    if cancellation is None:
+                        cancellation = exc
+            # Reported only now, with every source out: a log handler is
+            # caller code, and an interrupt from one must not strand the
+            # rest. Inside the guard: reporting is teardown too.
+            for failure in failures:
+                try:
+                    logger.warning("Releasing a run failed: %s", failure)
+                except Exception:
+                    # A reporter that fails must not become the answer close()
+                    # gives: the release that failed is the news.
+                    pass
+                except BaseException as exc:
+                    # Someone wants out: stop reporting. The FIRST
+                    # cancellation is still the one re-raised.
+                    if cancellation is None:
+                        cancellation = exc
+                    break
+        finally:
+            self._closing = False
+        if cancellation is not None:
+            raise cancellation
+        if failures:
+            raise failures[0]
+
+    def __enter__(self) -> Self:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> None:
+        self.close()
+
+    def run_finished(self, run: "FeedRun[ItemT]") -> None:
+        """
+        End-of-run hook: called with the run that ended, once, after it
+        released its source and logged its stats. Override it to alert;
+        nothing needs to be raised or chained. It reports, so an
+        exception raised here is logged at ERROR and goes no further.
+        """

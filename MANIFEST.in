@@ -1,0 +1,6 @@
+# The sdist carries what it takes to audit and run the suite from it.
+include ARCHITECTURE.md COOKBOOK.md CONTRIBUTING.md SECURITY.md LICENSE
+include xmlstreamer/py.typed
+recursive-include assets *.png
+recursive-include tests *.py
+recursive-include benchmarks *.py *.md
