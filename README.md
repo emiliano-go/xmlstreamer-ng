@@ -1,4 +1,4 @@
-![xmlstreamer: continuous feed / discrete output](https://raw.githubusercontent.com/carlosplanchon/xmlstreamer/main/assets/banner.png)
+![xmlstreamer: continuous feed / discrete output](assets/banner.png)
 
 # xmlstreamer-ng
 
@@ -26,7 +26,7 @@ It is intended for XML ingestion, archival processing, ETL and migration workflo
 
 ### When not to use it
 
-- If your XML is trusted, consistently well-formed and raw speed is the primary concern, `lxml.etree.iterparse` will usually be faster and simpler - the benchmark below says exactly that.
+- If your XML is trusted, consistently well-formed and raw speed is the primary concern, `lxml.etree.iterparse` is the simpler, battle-tested tool - though on item-shaped feeds the benchmark below shows it no longer ahead.
 - If your data lives in XML attributes (`<book id="123" year="1998"/>`), this library will not extract it: items are built from element text only.
 - If your separator tag legitimately nests inside itself, that is outside this library's documented contract.
 
@@ -151,50 +151,52 @@ uv run --group bench python benchmarks/run_all.py
 uv run --group bench python benchmarks/bench_rypipe.py --feed-mb 100
 ```
 
-*Measured 2026-10-01 on an i5-1335U, Python 3.13, lxml 6.1.3, xmltodict 1.0.4.
+*Measured 2026-10-12 on a Ryzen 7 5800X, Python 3.14.8, lxml 6.1.3, xmltodict 1.0.4.
 Absolute numbers track the machine; the ratios are stable across runs.*
 
 The engine is Rust. The per-item streaming API (`StreamInterpreter`) keeps the
 recovery semantics; the adapter API (`XmlSource`) adds Arrow, projection and
 parallelism. The streaming API used to be ~3.5x slower than the stdlib; it is now
-on par with it.
+on par with or faster than both the stdlib and lxml.
 
 **Speed (per-item API).** Parse-only throughput over the same in-memory bytes,
 best of N interleaved rounds:
 
 | feed | xmlstreamer | lxml iterparse (recover=True) | stdlib ET iterparse | xmltodict |
 |---|---|---|---|---|
-| flat items | 204k items/s | 166k | 184k | 59k |
-| CDATA-heavy | 182k items/s | 144k | 201k | 66k |
+| flat items | 341k items/s | 317k | 252k | 88k |
+| CDATA-heavy | 278k items/s | 201k | 216k | 78k |
 
 **Columnar / parallel adapter.** Same 128 MiB file, every parser reading it:
 
 | engine | throughput | peak RSS |
 |---|---|---|
-| XmlSource columnar | 105 MB/s | 310 MB |
-| XmlSource parallel (8 threads) | 457 MB/s | 283 MB |
-| XmlSource bounded parallel streaming | 376 MB/s | 146 MB |
-| XmlSource projected (`schema=[...]`) | 251 MB/s | 217 MB |
-| XmlSource projected, 8 threads | 975 MB/s | 213 MB |
-| stdlib ET iterparse | 40 MB/s | 18 MB |
-| lxml iterparse (recover=True) | 47 MB/s | 25 MB |
+| XmlSource columnar | 132 MB/s | 292 MB |
+| XmlSource parallel (8 threads) | 278 MB/s | 298 MB |
+| XmlSource bounded parallel streaming | 533 MB/s | 211 MB |
+| XmlSource projected (`schema=[...]`) | 134 MB/s | 231 MB |
+| XmlSource projected, 8 threads | 558 MB/s | 255 MB |
+| stdlib ET iterparse | 30 MB/s | 18 MB |
+| lxml iterparse (recover=True) | 63 MB/s | 23 MB |
 
-For bulk local ingestion the adapter is roughly 2.5x stdlib single-threaded,
-~10x in parallel, and ~25x when a projection lets the scanner skip unwanted
-fields. Parallel and bounded modes are where the engine pays off; the per-item
-API is for feeds that arrive over the network or need the recovery contract.
+For bulk local ingestion the adapter is roughly 4x stdlib single-threaded and
+~9x in parallel; a projection that lets the scanner skip unwanted fields adds
+another ~2x on top of parallel in this run (on other feeds and CPUs the
+projection win is larger - it depends on how much of each item is skipped).
+Parallel and bounded modes are where the engine pays off; the per-item API is
+for feeds that arrive over the network or need the recovery contract.
 
 **Peak memory.** Each parser processes the same 121 MB feed alone, in a fresh
 subprocess, and reports its peak RSS - measured by the kernel, not estimated.
 
 | parser | peak RSS |
 |---|---|
-| xmlstreamer per-item | 73 MB |
-| XmlSource bounded streaming | 146 MB |
-| lxml iterparse | 24 MB |
-| stdlib ET iterparse | 17 MB |
-| xmltodict (streaming mode) | 22 MB |
-| xmltodict (as commonly used) | 443 MB - grows with the feed |
+| xmlstreamer per-item | 88 MB |
+| XmlSource bounded streaming | 209 MB |
+| lxml iterparse | 22 MB |
+| stdlib ET iterparse | 16 MB |
+| xmltodict (streaming mode) | 24 MB |
+| xmltodict (as commonly used) | 444 MB - grows with the feed |
 
 Encoding detection only runs when the first 64 KiB are not already valid UTF-8,
 so the common case never pays for it. The bounded modes stay flat as the feed

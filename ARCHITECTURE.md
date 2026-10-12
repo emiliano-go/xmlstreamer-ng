@@ -4,17 +4,17 @@ One page on how xmlstreamer works inside, why it is built that way, and
 which invariants a change must preserve.
 
 > **Engine location.** The byte-level tokenizer and the per-item parse
-> now run in the Rust engine under `native/` (built on `rypipe-core`,
+> run in the Rust engine under `native/` (built on `rypipe-core`,
 > compiled to `xmlstreamer._xmlstreamer`). `xmlstreamer/__init__.py` is
 > the configuration, acquisition and API surface; it drives the engine
 > across the FFI boundary and logs what the engine reports. The two-layer
-> design and every invariant below are unchanged: the Rust `Tokenizer`
-> is the byte layer (it skips markup sections and cuts items out), and
-> `native/src/xml.rs` parses one item in isolation. The Python class
-> names (`Tokenizer`, `ParsedItem`, `Sections`) remain the contract the
-> tests pin. The rest of this document describes the design the Rust
-> engine was ported to preserve, so it stays the map for the invariants,
-> not a line-by-line map of the current code.
+> design and every invariant below are unchanged: the Rust scanner
+> (`native/src/tokenizer.rs`, `Engine`) is the byte layer (it skips
+> markup sections and cuts items out), and `native/src/xml.rs` parses one
+> item in isolation. The Python class names (`Tokenizer`, `ParsedItem`,
+> `Sections`) remain the contract the tests pin. Where an invariant used
+> to name a Python helper, the name of this section now points at its
+> Rust counterpart; the property itself is unchanged.
 
 ## The two-layer design
 
@@ -27,11 +27,22 @@ into two layers that never share responsibilities.
    or interpret. It does know the shapes that are markup rather than
    content - comments, CDATA, processing instructions, DOCTYPE
    declarations, quoted attribute values - because a separator tag
-   inside one of those is not an item.
+   inside one of those is not an item. This layer is the Rust
+   `Engine` in `native/src/tokenizer.rs`, a direct port of the original
+   Python state machine; the port kept the helper names
+   (`feed_origin_buffer`, `pending_tag_tail`, `resume_tag_scan`), so the
+   invariants below name the same mechanisms they always did, now on the
+   Rust side of the FFI boundary. rypipe-core owns the driver loop
+   around the scanner: buffer refills, the EOF handshake and the
+   diagnostics channel (`RecordStream` in `native/src/lib.rs`, wired to
+   `StreamingRecordParser` in `native/src/stream_parser.rs`).
 2. **The Rust engine parses one item at a time, in isolation.** Each
    cut-out item is wrapped and fed to the Rust parser
-   (`native/src/xml.rs`, via `parse_item`), which either produces a flat
-   dict or fails for that item alone.
+   (`native/src/xml.rs`, via `parse_document`), which either produces a
+   flat dict or fails for that item alone. Invalid utf-8 in an item is
+   replaced with `U+FFFD` up front (`sanitize_item_bytes`, a Python fast
+   path: already-valid utf-8 passes through untouched) and the item
+   still parses.
 
 Why: a malformed item cannot poison the document, because no parser
 ever sees the document - the engine only ever sees one item. Corruption
@@ -90,24 +101,28 @@ the `stats_*` properties) so reading stats after a loop stays simple.
 These are the properties a change must not break. Most of them are
 pinned by tests (`tests/`), including generative ones (Hypothesis).
 
-- **The pending bytes are `BUFFER[POS:]`.** The tokenizer advances a
-  cursor instead of re-slicing the buffer per item; consumed bytes are
-  compacted away once per refill (`feed_origin_buffer`), never in the
-  hot path.
+- **The pending bytes are one buffer with two cursors.** The Rust
+  engine (`native/src/tokenizer.rs`) keeps the unconsumed bytes in a
+  single buffer and advances `pos` (consumed) and `scan` (examined)
+  cursors instead of re-slicing per item; consumed bytes are compacted
+  away once per refill (`feed_origin_buffer`), never in the hot path.
 - **Partial tails are never discarded.** A `<ite` or `<!-` cut at a
   buffer boundary is kept (`pending_tag_tail`) until more bytes
   arrive; an unterminated comment or CDATA section requests more data
   without consuming anything. Only the sought separator tag is walked
   across refills: a stray `<` in text, quotes and all, holds nothing.
-- **Separator matches inside markup do not count** (`advance_to`).
-  Comments, CDATA, processing instructions and DOCTYPE declarations are
-  scanned over, so a `<item>` written inside one can neither open, nor
-  close, nor become an item.
-- **The scanner never re-reads a byte** (`SCAN`). Section walking and
-  tag walking are both resumable: split across refills, they continue
-  where they stopped instead of restarting at the opener, so a huge
-  comment (or a huge attribute value) costs one pass in total, not one
-  per refill.
+- **Separator matches inside markup do not count.** Comments, CDATA,
+  processing instructions and DOCTYPE declarations are scanned over -
+  the Rust scanner classifies each markup opener, walks to its real end
+  (resumable cursors, quoted strings and the DOCTYPE internal subset
+  accounted for) and only then resumes the tag walk - so a `<item>`
+  written inside one can neither open, nor close, nor become an item.
+- **The scanner never re-reads a byte.** Section walking and tag walking
+  are both resumable in the Rust engine (`scan`, `tag_scan`,
+  `resume_tag_scan`, `resume_doctype_scan`): split across refills, they
+  continue where they stopped instead of restarting at the opener, so a
+  huge comment (or a huge attribute value) costs one pass in total, not
+  one per refill.
 - **The same bytes give the same items, however they arrive.** Buffer
   and chunk sizes change when work happens, never what comes out: a
   `>` inside a quoted attribute value does not end a tag at any buffer
@@ -242,10 +257,30 @@ pinned by tests (`tests/`), including generative ones (Hypothesis).
    (`stream_gzip_decompress`), encoding (`resolve_sample_encoding`,
    `resolve_stream_encoding`, `decode_stream`), and `_owned_generator`
    (deterministic cleanup).
-3. Per-item parsing: `ItemHandler` (flattening rules) and `parse_item`.
+3. Per-item parsing: `sanitize_item_bytes` (the utf-8 fast path) and
+   `parse_item` / `parse_sanitized_item`, thin wrappers over the Rust
+   `parse_document` that log key collisions and drop malformed items.
 4. `Nested` / `to_nested` / `Raw` (opt-in output shapes).
-5. `Tokenizer` (the byte layer: buffer, cursors, section scanning).
+5. `Tokenizer`: a thin driver over the Rust `RecordStream` - it feeds
+   the acquisition generator's chunks in (at least `buffer_size` bytes
+   per refill, as the historical tokenizer did), turns each engine
+   record into a `ParsedItem`, and drains the engine's warning queue
+   (`has_logs` / `take_logs`) after every `next_item` call.
 6. `StreamInterpreter` (the public iterator).
+
+The byte layer and the per-item parse themselves live under `native/`:
+`tokenizer.rs` (the ported scanner), `xml.rs` (the per-item parser),
+`stream_parser.rs` (the `StreamingRecordParser` adapter that reports
+each item and forwards the scanner's warnings to the rypipe
+diagnostics channel), `splitter.rs` / `parser.rs` (the columnar
+`XmlSplitter` / `XmlParser` used by the adapter API) and `lib.rs` (the
+PyO3 module: `RecordStream`, `parse_document`, `read_xml*`,
+`iter_xml_batches_par`).
+
+The warnings the engine emits are formatted in Rust to match the
+historical Python warnings byte for byte (`DiagSink` in `lib.rs`), so
+the log a user reads is identical to the pre-Rust library's; the
+`stream_parser.rs` warning table is the parity contract.
 
 `xmlstreamer/__main__.py` is the CLI: a thin argparse wrapper that
 streams items as JSON Lines or raw bytes. It uses only the public API.
@@ -296,10 +331,13 @@ Each choice below, and the reason it rests on:
   items would invent them.
 - **No async API.** A sync iterator composes with anything, and a dual
   API would double the most delicate surface (errors and cleanup).
-- **No internal parallelism.** Parsing callbacks cannot release the
-  GIL, and per-item fan-out breaks ordering and first-item latency.
-  Parallelism belongs at the per-feed level, in the caller's hands
-  (see the cookbook's parallel-feeds recipe).
+- **No internal parallelism in the per-item API.** The streaming
+  iterator must keep ordering and first-item latency, so it stays
+  single-threaded; the columnar adapter (`read_xml_par`,
+  `iter_xml_batches_par`) is where the Rust engine fans out across
+  threads, releasing the GIL while it works. Parallelism across feeds
+  belongs in the caller's hands (see the cookbook's parallel-feeds
+  recipe).
 - **Configuration and run are separate objects.** `StreamInterpreter`
   holds the settings and is reusable; iterating it opens a `FeedRun`
   that owns everything belonging to one pass, so nested loops and
@@ -312,6 +350,7 @@ Each choice below, and the reason it rests on:
   a generator the caller wraps around the run, not a `__next__` to
   override.
 
-- **One file, two dependencies.** Auditability is a feature for a
-  library that asks to be trusted with hostile input. The engine stays
-  in one file until there is a concrete reason it cannot.
+- **Auditability is a feature for a library that asks to be trusted
+  with hostile input.** The Python layer stays in one file; the engine
+  is a self-contained Rust crate under `native/` whose only heavy
+  dependency is `rypipe-core`.

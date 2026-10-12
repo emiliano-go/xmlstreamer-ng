@@ -37,9 +37,12 @@ dependencies = [
 xmlstreamer = "xmlstreamer.__main__:main"
 
 [project.urls]
-Homepage = "https://github.com/carlosplanchon/xmlstreamer"
-Repository = "https://github.com/carlosplanchon/xmlstreamer"
-Issues = "https://github.com/carlosplanchon/xmlstreamer/issues"
+# The canonical owner of the xmlstreamer-ng repo is not settled yet;
+# these placeholders point at the project's own name and must be updated
+# once the real home exists.
+Homepage = "https://github.com/xmlstreamer-ng/xmlstreamer-ng"
+Repository = "https://github.com/xmlstreamer-ng/xmlstreamer-ng"
+Issues = "https://github.com/xmlstreamer-ng/xmlstreamer-ng/issues"
 
 [dependency-groups]
 bench = [

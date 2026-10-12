@@ -312,8 +312,10 @@ with ThreadPoolExecutor(max_workers=6) as pool:
 ```
 
 Keep `max_workers` modest: the win comes from overlapping network
-waits, not from parallel parsing - Python still parses one item at a
-time across threads, so a pool buys nothing for local files.
+waits, not from parallel parsing - the per-item engine is
+single-threaded, run by run, so a pool buys nothing for local files
+(local bulk ingestion wants the columnar/parallel adapter instead;
+see the README's Performance section).
 
 ## 12. Replay a captured feed from disk
 

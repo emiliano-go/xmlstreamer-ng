@@ -9,7 +9,7 @@ import argparse
 import platform
 import sys
 from datetime import date
-from importlib.metadata import version
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 from typing import List
 
@@ -45,6 +45,13 @@ def _label(parser_key: str) -> str:
     return LABELS.get(parser_key, parser_key)
 
 
+def _dist_version(name: str) -> str:
+    try:
+        return version(name)
+    except PackageNotFoundError:
+        return version("xmlstreamer-ng")
+
+
 def main() -> None:
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--quick", action="store_true")
@@ -54,7 +61,7 @@ def main() -> None:
     print(
         f"Date: {date.today().isoformat()} | CPU: {_cpu_model()} | "
         f"Python {platform.python_version()} | "
-        f"xmlstreamer {version('xmlstreamer')}, lxml {version('lxml')}, "
+        f"xmlstreamer {_dist_version('xmlstreamer')}, lxml {version('lxml')}, "
         f"xmltodict {version('xmltodict')}, chardet {version('chardet')}"
     )
     if args.quick:
