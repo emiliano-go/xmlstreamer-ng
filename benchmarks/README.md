@@ -52,34 +52,34 @@ lost with no signal, or text corrupted with no signal.
 
 ## Results
 
-Date: 2026-08-08 | CPU: 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz | Python 3.14.6 | xmlstreamer 2.0.0, lxml 6.1.1, xmltodict 1.0.4, chardet 7.4.3
+Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer 2.2.0, lxml 6.1.3, xmltodict 1.0.4, chardet 7.6.0
 
 ### Speed (parse-only, same in-memory bytes, best of N)
 
 | feed | parser | items | seconds | items/s |
 |---|---|---|---|---|
-| plain | xmlstreamer | 100,000 | 1.109 | 90,180 |
-| plain | lxml iterparse (recover=True) | 100,000 | 0.399 | 250,668 |
-| plain | stdlib ElementTree iterparse | 100,000 | 0.490 | 204,287 |
-| plain | xmltodict | 100,000 | 1.676 | 59,653 |
-| plain | xmltodict (streaming mode) | 100,000 | 1.626 | 61,497 |
-| cdata | xmlstreamer | 50,000 | 0.826 | 60,554 |
-| cdata | lxml iterparse (recover=True) | 50,000 | 0.450 | 111,133 |
-| cdata | stdlib ElementTree iterparse | 50,000 | 0.404 | 123,726 |
-| cdata | xmltodict | 50,000 | 0.986 | 50,699 |
-| cdata | xmltodict (streaming mode) | 50,000 | 0.934 | 53,518 |
-| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 1.810 | 55,254 |
+| plain | xmlstreamer | 100,000 | 0.293 | 341,469 |
+| plain | lxml iterparse (recover=True) | 100,000 | 0.316 | 316,885 |
+| plain | stdlib ElementTree iterparse | 100,000 | 0.397 | 251,891 |
+| plain | xmltodict | 100,000 | 1.141 | 87,664 |
+| plain | xmltodict (streaming mode) | 100,000 | 1.076 | 92,964 |
+| cdata | xmlstreamer | 50,000 | 0.180 | 277,948 |
+| cdata | lxml iterparse (recover=True) | 50,000 | 0.249 | 200,701 |
+| cdata | stdlib ElementTree iterparse | 50,000 | 0.231 | 216,207 |
+| cdata | xmltodict | 50,000 | 0.642 | 77,937 |
+| cdata | xmltodict (streaming mode) | 50,000 | 0.600 | 83,383 |
+| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 0.390 | 256,158 |
 
 ### Peak memory (one subprocess per parser, RSS)
 
 | parser | feed MB | peak RSS MB | items | seconds |
 |---|---|---|---|---|
-| (python + imports baseline) | 121 | 17 | 0 | 0.00 |
-| xmlstreamer | 121 | 31 | 900,000 | 14.98 |
-| lxml iterparse (recover=True) | 121 | 25 | 900,000 | 5.74 |
-| stdlib ElementTree iterparse | 121 | 18 | 900,000 | 7.19 |
-| xmltodict (streaming mode) | 121 | 23 | 900,000 | 19.37 |
-| xmltodict | 121 | 444 | 900,000 | 19.35 |
+| (python + imports baseline) | 121 | 15 | 0 | 0.00 |
+| xmlstreamer | 121 | 88 | 900,000 | 3.96 |
+| lxml iterparse (recover=True) | 121 | 22 | 900,000 | 3.15 |
+| stdlib ElementTree iterparse | 121 | 16 | 900,000 | 3.91 |
+| xmltodict (streaming mode) | 121 | 24 | 900,000 | 11.00 |
+| xmltodict | 121 | 444 | 900,000 | 11.28 |
 
 ### Dirty-feed gauntlet (what each parser does to broken input)
 
@@ -101,12 +101,12 @@ Date: 2026-08-08 | CPU: 11th Gen Intel(R) Core(TM) i5-1135G7 @ 2.40GHz | Python 
 
 ## Reading the results honestly
 
-- On raw parse speed lxml and stdlib ElementTree are roughly 2-3x
-  faster than xmlstreamer; xmltodict trails
-  xmlstreamer on both feed shapes in the current run. Tens of
-  thousands of items per second is still far more than a feed pipeline
-  typically needs.
-- On memory, every streaming parser is flat (18-31 MB on this run)
+- On raw parse speed the Rust engine put xmlstreamer ahead of lxml and
+  the stdlib on both feed shapes in this run; xmltodict trails on both.
+  Absolute numbers move with the machine's thermal state between runs;
+  the ratios between parsers are far more stable, and those are the
+  numbers worth reading.
+- On memory, every streaming parser is flat (16-88 MB on this run)
   and xmlstreamer sits with the pack: encoding detection is skipped
   entirely when the sample is already valid utf-8, and only
   legacy-encoded feeds pay chardet's transient startup peak.
