@@ -77,9 +77,12 @@ jobs:
             exit 1
           fi
 
+      # Not from the repo root: the source tree there shadows the installed
+      # package, and it has no built extension.
       - name: Smoke test the source distribution
         run: >
-          uv run --isolated --no-project --with dist/*.tar.gz
+          cd "$(mktemp -d)" && uv run --isolated --no-project
+          --with "$GITHUB_WORKSPACE"/dist/*.tar.gz
           python -c "import xmlstreamer; print(xmlstreamer.__version__)"
 
       - name: Upload sdist
