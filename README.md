@@ -3,9 +3,8 @@
 # xmlstreamer-ng
 
 [![PyPI version](https://img.shields.io/pypi/v/xmlstreamer-ng.svg)](https://pypi.org/project/xmlstreamer-ng/)
-[![Python versions](https://img.shields.io/pypi/pyversions/xmlstreamer.svg)](https://pypi.org/project/xmlstreamer/)
+[![Python versions](https://img.shields.io/pypi/pyversions/xmlstreamer-ng.svg)](https://pypi.org/project/xmlstreamer-ng/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/carlosplanchon/xmlstreamer)
 
 **Stream huge, messy XML feeds into Python records - without loading the entire document into memory or hiding partial failures.**
 
