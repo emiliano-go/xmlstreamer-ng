@@ -23,7 +23,7 @@ DOCUMENTED_API = {
 
 
 def test_version_matches_distribution_metadata():
-    assert xmlstreamer.__version__ == version("xmlstreamer")
+    assert xmlstreamer.__version__ == version("xmlstreamer-ng")
 
 
 def test_all_names_exist():

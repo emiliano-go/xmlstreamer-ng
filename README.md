@@ -11,11 +11,11 @@
 
 **xmlstreamer-ng** is a Python library designed for efficient, memory-friendly streaming and parsing of large XML feeds from various sources, including compressed formats. It supports decompression, character encoding detection, tag-based itemization, and optional item filtering, making it ideal for handling real-time XML data feeds, large datasets, and complex structured content.
 
-## Why xmlstreamer?
+## Why xmlstreamer-ng?
 
-Large XML feeds retrieved from remote systems can be malformed, incorrectly encoded, or interrupted in transit. xmlstreamer processes them incrementally and isolates failures when corruption is contained within an item, while reporting partial failures explicitly.
+Large XML feeds retrieved from remote systems can be malformed, incorrectly encoded, or interrupted in transit. xmlstreamer-ng processes them incrementally and isolates failures when corruption is contained within an item, while reporting partial failures explicitly.
 
-With a strict parser, one broken record invalidates the entire document. With an aggressive recovery parser, malformed input may be silently rewritten into data that was never actually there. xmlstreamer is built for the space between those two behaviors:
+With a strict parser, one broken record invalidates the entire document. With an aggressive recovery parser, malformed input may be silently rewritten into data that was never actually there. xmlstreamer-ng is built for the space between those two behaviors:
 
 - process large XML documents without loading them entirely into memory;
 - deliver every intact item, before and after localized corruption;
@@ -30,7 +30,7 @@ It is intended for XML ingestion, archival processing, ETL and migration workflo
 - If your data lives in XML attributes (`<book id="123" year="1998"/>`), this library will not extract it: items are built from element text only.
 - If your separator tag legitimately nests inside itself, that is outside this library's documented contract.
 
-xmlstreamer is for large or unreliable inputs where conservative recovery, bounded memory and explicit partial-failure semantics matter more than maximum parser throughput.
+xmlstreamer-ng is for large or unreliable inputs where conservative recovery, bounded memory and explicit partial-failure semantics matter more than maximum parser throughput.
 
 ## Features
 
