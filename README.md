@@ -10,6 +10,10 @@
 
 **xmlstreamer-ng** is a Python library designed for efficient, memory-friendly streaming and parsing of large XML feeds from various sources, including compressed formats. It supports decompression, character encoding detection, tag-based itemization, and optional item filtering, making it ideal for handling real-time XML data feeds, large datasets, and complex structured content.
 
+## Origins
+
+xmlstreamer-ng is based on [carlosplanchon/xmlstreamer](https://github.com/carlosplanchon/xmlstreamer), the original project by Carlos A. Planchón (MIT), and keeps its streaming, item-based approach to parsing large or malformed XML feeds. Its parsing engine is built on [emiliano-go/rypipe](https://github.com/emiliano-go/rypipe) ([rypipe-core](https://crates.io/crates/rypipe-core)).
+
 ## Why xmlstreamer-ng?
 
 Large XML feeds retrieved from remote systems can be malformed, incorrectly encoded, or interrupted in transit. xmlstreamer-ng processes them incrementally and isolates failures when corruption is contained within an item, while reporting partial failures explicitly.
