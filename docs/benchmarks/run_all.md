@@ -1,6 +1,6 @@
 # xmlstreamer benchmarks
 
-Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer 2.2.0, lxml 6.1.3, xmltodict 1.0.4, chardet 7.6.0
+Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer 1.0.0, lxml 6.1.3, xmltodict 1.0.4, chardet 7.6.0
 
 ## Speed (parse-only, same in-memory bytes, best of N)
 

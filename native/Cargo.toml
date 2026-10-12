@@ -1,11 +1,11 @@
 [package]
 name = "xmlstreamer-native"
-version = "2.2.0"
+version = "1.0.0"
 edition = "2021"
 description = "Rust parsing engine (built on rypipe-core) behind the xmlstreamer-ng Python package"
 license = "MIT"
-repository = "https://github.com/xmlstreamer-ng/xmlstreamer-ng"
-homepage = "https://github.com/xmlstreamer-ng/xmlstreamer-ng"
+repository = "https://github.com/emiliano-go/xmlstreamer-ng"
+homepage = "https://github.com/emiliano-go/xmlstreamer-ng"
 exclude = [".cargo"]
 
 [lib]
