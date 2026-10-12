@@ -847,8 +847,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rypipe-core"
-version = "0.4.0"
-source = "git+https://github.com/emiliano-go/rypipe?rev=55ed2c3#55ed2c315cedca94d9569f984711ffbe2e1a822a"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3a7eaa8c24c1cab7fffd20b04c189ddf04cedb5a86ec98b03fead90b64eacff7"
 dependencies = [
  "arrow",
  "chrono",
@@ -869,8 +870,9 @@ dependencies = [
 
 [[package]]
 name = "rypipe-python"
-version = "0.4.0"
-source = "git+https://github.com/emiliano-go/rypipe?rev=55ed2c3#55ed2c315cedca94d9569f984711ffbe2e1a822a"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1902b04ec5a12881823f6e345ff8c490d3503ccc1d25402619154dc415884c8"
 dependencies = [
  "arrow",
  "mimalloc",
