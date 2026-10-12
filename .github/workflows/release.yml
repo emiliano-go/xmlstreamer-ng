@@ -71,7 +71,7 @@ jobs:
       - name: Tag must match the built version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          if [ ! -f "dist/xmlstreamer-${tag}.tar.gz" ]; then
+          if [ ! -f "dist/xmlstreamer_ng-${tag}.tar.gz" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match what was built:"
             ls -1 dist/
             exit 1
@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     environment:
       name: pypi
-      url: https://pypi.org/project/xmlstreamer/
+      url: https://pypi.org/project/xmlstreamer-ng/
     permissions:
       id-token: write
     steps:
