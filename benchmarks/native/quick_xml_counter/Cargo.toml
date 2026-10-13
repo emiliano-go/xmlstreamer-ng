@@ -1,0 +1,11 @@
+[package]
+name = "quick_xml_counter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+quick-xml = "0.37"
+
+[profile.release]
+lto = true
+codegen-units = 1

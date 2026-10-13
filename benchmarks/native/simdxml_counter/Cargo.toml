@@ -1,0 +1,13 @@
+[package]
+name = "simdxml_counter"
+version = "0.1.0"
+edition = "2021"
+
+# Path dependency on a git clone of simdxml (see build_native.sh):
+#   git clone https://github.com/simdxml/simdxml /tmp/simdxml-workspace
+[dependencies]
+simdxml = { path = "/tmp/simdxml-workspace/crates/simdxml" }
+
+[profile.release]
+lto = true
+codegen-units = 1

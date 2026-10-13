@@ -106,6 +106,37 @@ def main() -> None:
         for case in notes:
             print(f"- {case.name}: {case.note}")
 
+    print("\n## Native references (raw parse throughput, speed only)\n")
+    try:
+        from native_bench import available_bins, run_native
+    except ImportError:  # pragma: no cover - defensive
+        available_bins = None
+        run_native = None
+    if available_bins is not None and available_bins():
+        native_rows = []
+        for r in run_native(quick=args.quick):
+            native_rows.append([
+                r["feed"], r["parser"], f"{r['items']:,}",
+                f"{r['seconds']:.3f}", f"{r['rate']:,.0f}", f"{r['mbps']:,.1f}",
+            ])
+        print(markdown_table(
+            ["feed", "parser", "items", "seconds", "items/s", "MB/s"],
+            native_rows,
+        ))
+        print(
+            "\nThese binaries fully parse the file and count <item> "
+            "elements. They carry none of the Python layer semantics "
+            "(encoding detection, recovery contract, Arrow "
+            "materialization): an upper-bound ruler, not a like-for-like "
+            "parser comparison. Build them with "
+            "benchmarks/native/build_native.sh."
+        )
+    else:
+        print(
+            "skipped: native binaries not built "
+            "(run benchmarks/native/build_native.sh to enable)"
+        )
+
 
 if __name__ == "__main__":
     main()
