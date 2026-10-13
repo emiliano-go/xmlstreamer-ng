@@ -2,9 +2,23 @@
 
 # xmlstreamer-ng
 
-[![PyPI version](https://img.shields.io/pypi/v/xmlstreamer-ng.svg)](https://pypi.org/project/xmlstreamer-ng/)
-[![Python versions](https://img.shields.io/pypi/pyversions/xmlstreamer-ng.svg)](https://pypi.org/project/xmlstreamer-ng/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+<p align="center">
+  <a href="https://www.python.org/downloads/">
+    <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?logo=python&logoColor=white&style=for-the-badge" alt="Python">
+  </a>
+  <a href="https://www.rust-lang.org/">
+    <img src="https://img.shields.io/badge/Rust-1.78%2B-000000?logo=rust&logoColor=white&style=for-the-badge" alt="Rust">
+  </a>
+  <a href="LICENSE">
+    <img src="https://img.shields.io/badge/License-MIT-10AC84?style=for-the-badge" alt="License">
+  </a>
+  <a href="https://github.com/emiliano-go/xmlstreamer-ng/actions/workflows/ci.yaml">
+    <img src="https://img.shields.io/github/actions/workflow/status/emiliano-go/xmlstreamer-ng/ci.yaml?branch=master&style=for-the-badge&logo=github&label=CI" alt="CI">
+  </a>
+  <a href="https://pypi.org/project/xmlstreamer-ng/">
+    <img src="https://img.shields.io/pypi/v/xmlstreamer-ng?logo=pypi&logoColor=white&style=for-the-badge" alt="PyPI">
+  </a>
+</p>
 
 **Stream huge, messy XML feeds into Python records - without loading the entire document into memory or hiding partial failures.**
 
