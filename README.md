@@ -166,6 +166,9 @@ re-measures it on your machine:
 ```bash
 uv run --group bench python benchmarks/run_all.py
 uv run --group bench python benchmarks/bench_rypipe.py --feed-mb 100
+uv run --group bench python benchmarks/bench_scaling.py
+# optional native ruler: quick-xml / simdxml / pugixml
+benchmarks/native/build_native.sh
 ```
 
 *Measured 2026-10-12 on a Ryzen 7 5800X, Python 3.14.8, xmlstreamer-ng 1.1.0,
@@ -209,6 +212,39 @@ another ~10% on top of parallel in this run (on other feeds and CPUs the
 projection win is larger - it depends on how much of each item is skipped).
 Parallel and bounded modes are where the engine pays off; the per-item API is
 for feeds that arrive over the network or need the recovery contract.
+
+**Adapter scaling.** Same feeds, swept over thread counts (crxml-style
+table, best of 3, full numbers in
+[docs/benchmarks/scaling.md](docs/benchmarks/scaling.md)):
+
+| feed | path | rows/s | MB/s |
+|---|---|---|---|
+| plain 128 MiB | read_xml | 955k | 128 |
+| plain 128 MiB | read_xml_par (chunks=2) | 5,063k | 680 |
+| plain 128 MiB | iter_xml_batches_par (threads=8) | 3,985k | 535 |
+| cdata 50,000 | read_xml_par (chunks=4) | 2,068k | 976 |
+
+Single-threaded paths sit at 0.9-1.0M rows/s on flat feeds; `read_xml_par`
+jumps ~4x at chunks=2 and saturates the 8-core CPU by chunks=2-8. Extra
+threads past the physical core count add only noise.
+
+**Native references.** Raw parse throughput of the same feeds against
+quick-xml 0.37.5 (Rust), simdxml 0.2.1 (Rust, SIMD indexing) and
+pugixml 1.15 (C++), built `-O3`/lto via
+[benchmarks/native/build_native.sh](benchmarks/native/build_native.sh)
+(details in [docs/benchmarks/native.md](docs/benchmarks/native.md)):
+
+| feed | engine | items/s | MB/s |
+|---|---|---|---|
+| plain 128 MiB | quick-xml | 3,212k | 432 |
+| plain 128 MiB | simdxml | 1,513k | 203 |
+| plain 128 MiB | pugixml | 1,883k | 253 |
+
+These binaries only parse and count elements: no encoding detection, no
+recovery contract, no Arrow materialization. They are an upper-bound
+ruler, not like-for-like comparisons. Single-threaded `read_xml` runs at
+about 30% of quick-xml's raw parse speed; `read_xml_par` (chunks=2-8)
+exceeds every single-threaded native counter in MB/s.
 
 **Peak memory.** Each parser processes the same 121 MB feed alone, in a fresh
 subprocess, and reports its peak RSS - measured by the kernel, not estimated.
