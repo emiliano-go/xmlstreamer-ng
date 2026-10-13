@@ -687,8 +687,10 @@ fn pi_end(bytes: &[u8], start: usize) -> Option<usize> {
 }
 
 /// The item's close tag is located lexically: `</sep>` or `</sep junk>` end
-/// the item even when the tag itself is malformed, matching the scanner.
-fn closes_separator(tag: &[u8], sep: &[u8]) -> Option<usize> {
+/// the item even when the tag itself is malformed, matching the scanner. Sets
+/// `malformed` when the accepted close tag carries junk after the name (the
+/// `</sep junk>` case), which the streaming tokenizer counts as MALFORMED_TAG.
+fn closes_separator(tag: &[u8], sep: &[u8], malformed: &mut u64) -> Option<usize> {
     if !tag.starts_with(b"</") {
         return None;
     }
@@ -701,7 +703,10 @@ fn closes_separator(tag: &[u8], sep: &[u8]) -> Option<usize> {
     }
     match tag.get(2 + sep.len()) {
         Some(b'>') => Some(3 + sep.len()),
-        Some(&b) if crate::scan::is_ws(b) => Some(tag.len()),
+        Some(&b) if crate::scan::is_ws(b) => {
+            *malformed += 1;
+            Some(tag.len())
+        }
         _ => None,
     }
 }
@@ -1101,6 +1106,9 @@ pub enum Fused {
     Complete { resume: usize },
     /// The item's close tag is not in these bytes (partial trailing record).
     Incomplete,
+    /// A comment/CDATA/PI inside the item never closes in these bytes; the
+    /// item and everything after it are discarded.
+    Unterminated,
     /// The item is malformed; the caller resyncs and drops it.
     Malformed,
 }
@@ -1110,7 +1118,9 @@ pub enum Fused {
 ///
 /// Locating the `</sep>` is fused with field parsing: the item's bytes are
 /// walked once. A malformed item emits nothing; the caller resyncs with
-/// `find_close_sep` and drops it, matching the streaming parser.
+/// `find_close_sep_ex` and drops it, matching the streaming parser. Increments
+/// `malformed_close` when the item's own close tag is `</sep junk>`.
+#[allow(clippy::too_many_arguments)]
 pub fn parse_item_fused<E: FlatEmitter>(
     scratch: &mut Scratch,
     bytes: &[u8],
@@ -1119,6 +1129,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
     keep: Option<&std::collections::HashSet<String>>,
     strict: bool,
     emitter: &mut E,
+    malformed_close: &mut u64,
 ) -> Fused {
     scratch.stack.clear();
     scratch.pending.clear();
@@ -1147,7 +1158,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
         if bytes[i..].starts_with(b"<!--") {
             let end = match find_seq(bytes, i + 4, b"-->") {
                 Some(end) => end,
-                None => return Fused::Incomplete,
+                None => return Fused::Unterminated,
             };
             if !comment_is_well_formed(&bytes[i + 4..end]) {
                 return Fused::Malformed;
@@ -1158,7 +1169,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
         if bytes[i..].starts_with(b"<![CDATA[") {
             let end = match find_seq(bytes, i + 9, b"]]>") {
                 Some(end) => end,
-                None => return Fused::Incomplete,
+                None => return Fused::Unterminated,
             };
             let raw = &bytes[i + 9..end];
             let text = String::from_utf8_lossy(raw);
@@ -1178,7 +1189,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
         if bytes[i..].starts_with(b"<?") {
             let end = match find_seq(bytes, i + 2, b"?>") {
                 Some(end) => end,
-                None => return Fused::Incomplete,
+                None => return Fused::Unterminated,
             };
             if pi_end(bytes, i).is_none() {
                 return Fused::Malformed;
@@ -1199,7 +1210,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
             if scratch.stack.is_empty() {
                 // The delimiter is located lexically: junk in the closing
                 // tag still ends the item, whose content was parsed above.
-                if closes_separator(tag, sep.as_bytes()).is_none() {
+                if closes_separator(tag, sep.as_bytes(), malformed_close).is_none() {
                     return Fused::Malformed;
                 }
                 return finish_item(scratch, bytes, sep, &mut root, seen_child, emitter, end);

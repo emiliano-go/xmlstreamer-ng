@@ -3,16 +3,56 @@
 //! A chunk is aligned to record starts by `XmlSplitter`; this walks the
 //! complete items inside it, flattens each into the same `{path: text}`
 //! columns the streaming parser produces, and skips items that do not parse.
-//! A trailing partial item is left alone: the engine discards it.
+//! Every skip is counted in `ColumnarStats`; the Python entry points log the
+//! counters after the read completes. A trailing partial item is left alone:
+//! the engine discards it.
 
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use rypipe_core::{ColumnarSink, RecordParser, Value};
 
 use crate::scan;
 use crate::xml::{self, FlatEmitter, Scratch};
+
+/// Drop counters for the columnar/parallel reads, shared with every clone of
+/// the parser (the engine clones it across rayon workers). The Python entry
+/// points read them after a read completes and log a warning for anything
+/// non-zero, the way the streaming path logs per item.
+#[derive(Default)]
+pub struct ColumnarStats {
+    /// Items dropped whole because they did not parse.
+    pub malformed_items: AtomicU64,
+    /// Rows whose closing delimiter carried junk (`</sep junk>`): accepted as
+    /// a boundary (as in the streaming scanner) but counted, like the
+    /// streaming MALFORMED_TAGS counter.
+    pub malformed_closing_tags: AtomicU64,
+    /// Comment/CDATA/PI/DOCTYPE sections that never closed: everything after
+    /// them in the chunk was discarded.
+    pub unterminated_sections: AtomicU64,
+    /// Bytes discarded because of unterminated sections.
+    pub discarded_bytes: AtomicU64,
+}
+
+impl ColumnarStats {
+    /// `(malformed_items, malformed_closing_tags, unterminated_sections,
+    /// discarded_bytes)`
+    pub fn snapshot(&self) -> (u64, u64, u64, u64) {
+        (
+            self.malformed_items.load(Ordering::Relaxed),
+            self.malformed_closing_tags.load(Ordering::Relaxed),
+            self.unterminated_sections.load(Ordering::Relaxed),
+            self.discarded_bytes.load(Ordering::Relaxed),
+        )
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.snapshot() == (0, 0, 0, 0)
+    }
+}
 
 /// The subset of `field_types` the adapter can parse directly while scanning.
 #[derive(Clone, Copy)]
@@ -113,6 +153,9 @@ pub struct XmlParser {
     // Strict validates attribute values / text characters; fast (opt-in)
     // validates only element names and structure.
     strict: bool,
+    // Shared by every clone (the engine clones the parser per worker), so
+    // drops counted on any thread land in one place the caller can read.
+    stats: Arc<ColumnarStats>,
 }
 
 /// Emits one row per item, using the engine's layout-prediction fast path.
@@ -184,7 +227,14 @@ impl XmlParser {
             types,
             keep,
             strict,
+            stats: Arc::new(ColumnarStats::default()),
         }
+    }
+
+    /// The shared drop counters; clone the handle before moving the parser
+    /// into the engine to inspect them after the read completes.
+    pub fn stats(&self) -> Arc<ColumnarStats> {
+        Arc::clone(&self.stats)
     }
 
     fn parse_into<S: ColumnarSink + ?Sized>(&self, bytes: &[u8], sink: &mut S) {
@@ -202,9 +252,22 @@ impl XmlParser {
         scratch: &mut Scratch,
         sink: &mut S,
     ) {
+        let stats = &*self.stats;
         let mut i = 0usize;
         loop {
-            let Some((start, after_open)) = scan::find_open_sep(bytes, i, &self.sep) else {
+            let mut open_unterminated = false;
+            let Some((start, after_open)) =
+                scan::find_open_sep_ex(bytes, i, &self.sep, &mut open_unterminated)
+            else {
+                if open_unterminated {
+                    // A comment/CDATA/PI/DOCTYPE never closes: everything
+                    // after it in this chunk is discarded. Count it loudly;
+                    // the caller logs after the read completes.
+                    stats.unterminated_sections.fetch_add(1, Ordering::Relaxed);
+                    stats
+                        .discarded_bytes
+                        .fetch_add((bytes.len() - i) as u64, Ordering::Relaxed);
+                }
                 break;
             };
             if scan::is_self_closing(&bytes[start..after_open]) {
@@ -219,6 +282,7 @@ impl XmlParser {
             };
             // Fused scan + parse: one pass over the item's bytes. A malformed
             // item emits nothing; resync on its close tag and drop it.
+            let mut malformed_close = 0u64;
             match xml::parse_item_fused(
                 scratch,
                 bytes,
@@ -227,8 +291,12 @@ impl XmlParser {
                 self.keep.as_ref(),
                 self.strict,
                 &mut emitter,
+                &mut malformed_close,
             ) {
                 xml::Fused::Complete { resume } => {
+                    stats
+                        .malformed_closing_tags
+                        .fetch_add(malformed_close, Ordering::Relaxed);
                     i = resume;
                 }
                 xml::Fused::Incomplete => {
@@ -236,10 +304,42 @@ impl XmlParser {
                     // the trailing partial row.
                     break;
                 }
+                xml::Fused::Unterminated => {
+                    // A section inside the item never closes: the item and
+                    // everything after it in this chunk are discarded.
+                    stats.unterminated_sections.fetch_add(1, Ordering::Relaxed);
+                    stats
+                        .discarded_bytes
+                        .fetch_add((bytes.len() - start) as u64, Ordering::Relaxed);
+                    break;
+                }
                 xml::Fused::Malformed => {
-                    match scan::find_close_sep(bytes, after_open, &self.sep) {
-                        Some((_close, after_close)) => i = after_close,
-                        None => break,
+                    stats.malformed_items.fetch_add(1, Ordering::Relaxed);
+                    let mut close_unterminated = false;
+                    match scan::find_close_sep_ex(
+                        bytes,
+                        after_open,
+                        &self.sep,
+                        &mut close_unterminated,
+                        &mut malformed_close,
+                    ) {
+                        Some((_close, after_close)) => {
+                            stats
+                                .malformed_closing_tags
+                                .fetch_add(malformed_close, Ordering::Relaxed);
+                            i = after_close;
+                        }
+                        None => {
+                            if close_unterminated {
+                                stats
+                                    .unterminated_sections
+                                    .fetch_add(1, Ordering::Relaxed);
+                                stats
+                                    .discarded_bytes
+                                    .fetch_add((bytes.len() - start) as u64, Ordering::Relaxed);
+                            }
+                            break;
+                        }
                     }
                 }
             }

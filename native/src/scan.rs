@@ -142,6 +142,20 @@ fn find_tag_end(bytes: &[u8], from: usize) -> Option<usize> {
 /// whole; a section that does not close in these bytes stops the search
 /// (`None`): nothing after it can be trusted as a record boundary.
 pub fn find_open_sep(bytes: &[u8], from: usize, sep: &[u8]) -> Option<(usize, usize)> {
+    let mut unterminated = false;
+    find_open_sep_ex(bytes, from, sep, &mut unterminated)
+}
+
+/// `find_open_sep` that also reports *why* the search stopped: `unterminated`
+/// is set when a comment/CDATA/PI/DOCTYPE never closes in these bytes, so the
+/// caller can count the tail it is about to discard instead of dropping it
+/// silently. Pure end-of-input sets no flag.
+pub fn find_open_sep_ex(
+    bytes: &[u8],
+    from: usize,
+    sep: &[u8],
+    unterminated: &mut bool,
+) -> Option<(usize, usize)> {
     let n = bytes.len();
     let mut i = from;
     while i < n {
@@ -151,7 +165,10 @@ pub fn find_open_sep(bytes: &[u8], from: usize, sep: &[u8]) -> Option<(usize, us
                 i = end;
                 continue;
             }
-            Section::Unterminated => return None,
+            Section::Unterminated => {
+                *unterminated = true;
+                return None;
+            }
             Section::No => {}
         }
         if p + 1 + sep.len() <= n && &bytes[p + 1..p + 1 + sep.len()] == sep {
@@ -176,8 +193,17 @@ pub fn find_open_sep(bytes: &[u8], from: usize, sep: &[u8]) -> Option<(usize, us
 
 /// Find the next `</sep>` at or after `from`, skipping sections.
 ///
-/// Returns `(start_of_close_tag, position_after_it)`.
-pub fn find_close_sep(bytes: &[u8], from: usize, sep: &[u8]) -> Option<(usize, usize)> {
+/// Returns `(start_of_close_tag, position_after_it)`. `unterminated` is set
+/// when a section stops the search, and `malformed_close` counts accepted
+/// close tags that carry junk after the name (`</sep junk>`), which the
+/// streaming tokenizer counts as a MALFORMED_TAG.
+pub fn find_close_sep_ex(
+    bytes: &[u8],
+    from: usize,
+    sep: &[u8],
+    unterminated: &mut bool,
+    malformed_close: &mut u64,
+) -> Option<(usize, usize)> {
     let n = bytes.len();
     let mut i = from;
     while i < n {
@@ -187,7 +213,10 @@ pub fn find_close_sep(bytes: &[u8], from: usize, sep: &[u8]) -> Option<(usize, u
                 i = end;
                 continue;
             }
-            Section::Unterminated => return None,
+            Section::Unterminated => {
+                *unterminated = true;
+                return None;
+            }
             Section::No => {}
         }
         if p + 2 + sep.len() <= n
@@ -196,6 +225,11 @@ pub fn find_close_sep(bytes: &[u8], from: usize, sep: &[u8]) -> Option<(usize, u
         {
             let q = p + 2 + sep.len();
             if let Some(gt) = rypipe_core::scan::find(bytes, q, b'>') {
+                if bytes.get(q) != Some(&b'>') {
+                    // `</sep junk>`: accepted as a boundary (same as the
+                    // streaming scanner), but counted as a malformed tag.
+                    *malformed_close += 1;
+                }
                 return Some((p, gt + 1));
             }
             return None;

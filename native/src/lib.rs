@@ -131,6 +131,96 @@ impl ParseDiagnostics for DiagSink {
     }
 }
 
+/// Snapshot of the columnar parser's drop counters from the most recent
+/// read, for `last_read_diagnostics`.
+struct ColumnarSnapshot {
+    path: String,
+    malformed_items: u64,
+    malformed_closing_tags: u64,
+    unterminated_sections: u64,
+    discarded_bytes: u64,
+}
+
+static LAST_COLUMNAR: Mutex<Option<ColumnarSnapshot>> = Mutex::new(None);
+
+/// After a columnar/parallel read completes, log a warning for every kind of
+/// drop the parser counted (the streaming path logs each of these per item;
+/// the batch paths can only report post-hoc) and remember the counters for
+/// `last_read_diagnostics`.
+fn report_columnar_stats(py: Python<'_>, stats: &parser::ColumnarStats, path: &str) {
+    let (malformed, malformed_close, unterminated, discarded) = stats.snapshot();
+    if stats.is_empty() {
+        // A clean read clears the snapshot: last_read_diagnostics describes
+        // the most recent read, not some older one.
+        *LAST_COLUMNAR.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        return;
+    }
+    let logger = py
+        .import("logging")
+        .and_then(|logging| logging.getattr("getLogger"))
+        .and_then(|get_logger| get_logger.call1(("xmlstreamer_ng",)));
+    let Ok(logger) = logger else {
+        return;
+    };
+    if malformed > 0 {
+        let _ = logger.call_method1(
+            "warning",
+            (
+                "Discarding unparseable item (%s): %d item(s) dropped during the read of %r",
+                "malformed XML",
+                malformed,
+                path,
+            ),
+        );
+    }
+    if malformed_close > 0 {
+        let _ = logger.call_method1(
+            "warning",
+            (
+                "%d malformed closing delimiter(s) (e.g. '</item junk>') accepted as row boundaries during the read of %r",
+                malformed_close,
+                path,
+            ),
+        );
+    }
+    if unterminated > 0 {
+        let _ = logger.call_method1(
+            "warning",
+            (
+                "Unterminated section after %d bytes: discarding whatever follows it (%d occurrence(s) during the read of %r)",
+                discarded,
+                unterminated,
+                path,
+            ),
+        );
+    }
+    *LAST_COLUMNAR.lock().unwrap_or_else(|e| e.into_inner()) = Some(ColumnarSnapshot {
+        path: path.to_string(),
+        malformed_items: malformed,
+        malformed_closing_tags: malformed_close,
+        unterminated_sections: unterminated,
+        discarded_bytes: discarded,
+    });
+}
+
+/// Drop counters from the most recent columnar/parallel read (`read_xml`,
+/// `read_xml_par`, `read_xml_stream`, or an exhausted
+/// `iter_xml_batches_par`), or None when that read dropped nothing.
+#[pyfunction]
+fn last_read_diagnostics(py: Python<'_>) -> Option<Bound<'_, PyDict>> {
+    let guard = LAST_COLUMNAR.lock().unwrap_or_else(|e| e.into_inner());
+    let snap = guard.as_ref()?;
+    let dict = PyDict::new(py);
+    dict.set_item("path", &snap.path).ok()?;
+    dict.set_item("malformed_items", snap.malformed_items).ok()?;
+    dict.set_item("malformed_closing_tags", snap.malformed_closing_tags)
+        .ok()?;
+    dict.set_item("unterminated_sections", snap.unterminated_sections)
+        .ok()?;
+    dict.set_item("discarded_bytes", snap.discarded_bytes).ok()?;
+    Some(dict)
+}
+
 /// Incremental item stream: the rypipe `RecordStream` driver over the
 /// xmlstreamer scanner. `feed` pushes bytes; `next_item` returns
 /// `(2, item)`, `(1, None)` for need-more, `(0, None)` for EOF.
@@ -301,16 +391,16 @@ fn read_xml(
         min_chunk_bytes,
         observer.as_ref(),
     )?;
+    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let stats = parser.stats();
     let batch = py
         .detach(|| {
-            Pipeline::new(
-                XmlSplitter::new(&separator_tag),
-                XmlParser::new(&separator_tag, types, keep, strict),
-            )
-            .with_plan(plan)
-            .read_path(&path, use_mmap, prefault)
+            Pipeline::new(XmlSplitter::new(&separator_tag), parser)
+                .with_plan(plan)
+                .read_path(&path, use_mmap, prefault)
         })
         .map_err(py_err_from_rypipe)?;
+    report_columnar_stats(py, &stats, &path);
     record_batches_to_pyarrow_table(py, &[batch]).map(|table| table.unbind())
 }
 
@@ -369,16 +459,16 @@ fn read_xml_par(
         min_chunk_bytes,
         observer.as_ref(),
     )?;
+    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let stats = parser.stats();
     let batches = py
         .detach(|| {
-            Pipeline::new(
-                XmlSplitter::new(&separator_tag),
-                XmlParser::new(&separator_tag, types, keep, strict),
-            )
-            .with_plan(plan)
-            .read_path_par(&path, chunks, use_mmap, prefault)
+            Pipeline::new(XmlSplitter::new(&separator_tag), parser)
+                .with_plan(plan)
+                .read_path_par(&path, chunks, use_mmap, prefault)
         })
         .map_err(py_err_from_rypipe)?;
+    report_columnar_stats(py, &stats, &path);
     record_batches_to_pyarrow_table(py, &batches).map(|table| table.unbind())
 }
 
@@ -443,16 +533,16 @@ fn read_xml_stream(
         min_chunk_bytes,
         observer.as_ref(),
     )?;
+    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let stats = parser.stats();
     let batches = py
         .detach(|| {
-            Pipeline::new(
-                XmlSplitter::new(&separator_tag),
-                XmlParser::new(&separator_tag, types, keep, strict),
-            )
-            .with_plan(plan)
-            .read_path_stream(&path, budget, prefault)
+            Pipeline::new(XmlSplitter::new(&separator_tag), parser)
+                .with_plan(plan)
+                .read_path_stream(&path, budget, prefault)
         })
         .map_err(py_err_from_rypipe)?;
+    report_columnar_stats(py, &stats, &path);
     record_batches_to_pyarrow_batches(py, &batches).map(|list| list.unbind().into_any())
 }
 
@@ -463,6 +553,10 @@ fn read_xml_stream(
 #[pyclass]
 struct ParallelBatches {
     inner: Arc<std::sync::Mutex<ParallelStreamingBatchIterator>>,
+    path: String,
+    stats: Arc<parser::ColumnarStats>,
+    // Set once the iterator is exhausted and the drop counters are reported.
+    reported: std::sync::atomic::AtomicBool,
 }
 
 #[pymethods]
@@ -481,7 +575,15 @@ impl ParallelBatches {
                 .next()
         });
         match next {
-            None => Ok(None),
+            None => {
+                if !self
+                    .reported
+                    .swap(true, std::sync::atomic::Ordering::SeqCst)
+                {
+                    report_columnar_stats(py, &self.stats, &self.path);
+                }
+                Ok(None)
+            }
             Some(Ok(batch)) => {
                 Ok(Some(record_batch_to_pyarrow(py, &batch)?.unbind()))
             }
@@ -560,10 +662,12 @@ fn iter_xml_batches_par(
         max_reorder: 0,
         schema: None,
     };
+    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let stats = parser.stats();
     let inner = ParallelStreamingBatchIterator::new(
         std::path::PathBuf::from(&path),
         XmlSplitter::new(&separator_tag),
-        XmlParser::new(&separator_tag, types, keep, strict),
+        parser,
         Arc::new(plan),
         budget,
         prefault,
@@ -571,6 +675,9 @@ fn iter_xml_batches_par(
     );
     Ok(ParallelBatches {
         inner: Arc::new(std::sync::Mutex::new(inner)),
+        path,
+        stats,
+        reported: std::sync::atomic::AtomicBool::new(false),
     })
 }
 
@@ -585,6 +692,7 @@ fn _xmlstreamer(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(read_xml_par, m)?)?;
     m.add_function(wrap_pyfunction!(read_xml_stream, m)?)?;
     m.add_function(wrap_pyfunction!(iter_xml_batches_par, m)?)?;
+    m.add_function(wrap_pyfunction!(last_read_diagnostics, m)?)?;
     m.add_class::<ParallelBatches>()?;
     m.add_class::<RecordStream>()?;
     Ok(())

@@ -75,6 +75,16 @@ class XmlSource(Adapter):
     Unlike `StreamInterpreter`, the adapter does not run encoding detection:
     feeds must be UTF-8 (a leading BOM is allowed). Invalid bytes in text are
     replaced with U+FFFD; this path emits no warning for them.
+
+    Failure semantics match the streaming path: a malformed item is dropped,
+    but the drop is logged on the ``xmlstreamer_ng`` logger (``"Discarding
+    unparseable item"``) and counted. The same goes for an unterminated
+    comment/CDATA/PI (everything after it in the chunk is discarded, and the
+    read warns with the discarded byte count) and for closing delimiters with
+    junk (``</item junk>``), which are accepted as row boundaries but counted
+    as malformed. After a read completes, the counters are available from
+    ``_xmlstreamer.last_read_diagnostics()``; ``iter_xml_batches_par``
+    reports when its iterator is exhausted.
     """
 
     __slots__ = ("_separator_tag", "_engine_mode", "_threads")
