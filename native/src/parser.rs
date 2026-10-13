@@ -153,6 +153,10 @@ pub struct XmlParser {
     // Strict validates attribute values / text characters; fast (opt-in)
     // validates only element names and structure.
     strict: bool,
+    // Whether the execution plan is the identity (no rename, drop, projection
+    // or filter): `ColumnarSink::wants` can only answer "true" then, so the
+    // per-field resolve/hash round trip is skipped.
+    identity: bool,
     // Shared by every clone (the engine clones the parser per worker), so
     // drops counted on any thread land in one place the caller can read.
     stats: Arc<ColumnarStats>,
@@ -162,6 +166,7 @@ pub struct XmlParser {
 struct RowEmitter<'a, S: ColumnarSink + ?Sized> {
     sink: &'a mut S,
     types: &'a HashMap<String, FieldKind>,
+    identity: bool,
     ordinal: u32,
 }
 
@@ -172,7 +177,9 @@ impl<S: ColumnarSink + ?Sized> FlatEmitter for RowEmitter<'_, S> {
     }
 
     fn field(&mut self, name: &str, value: &str) {
-        if !self.sink.wants(name) {
+        // With the identity plan the sink wants every field; skip its
+        // resolve (two hash lookups per field) entirely.
+        if !self.identity && !self.sink.wants(name) {
             return;
         }
         // Locate-only mode (schema discovery): the sink needs the name, not
@@ -183,9 +190,15 @@ impl<S: ColumnarSink + ?Sized> FlatEmitter for RowEmitter<'_, S> {
             self.ordinal += 1;
             return;
         }
-        let value = match self.types.get(name) {
-            Some(kind) => typed_value(*kind, value),
-            None => Value::Str(Cow::Borrowed(value)),
+        let value = if self.types.is_empty() {
+            // No declared field_types: the common case, and `HashMap::get`
+            // would hash the name for nothing.
+            Value::Str(Cow::Borrowed(value))
+        } else {
+            match self.types.get(name) {
+                Some(kind) => typed_value(*kind, value),
+                None => Value::Str(Cow::Borrowed(value)),
+            }
         };
         let matched = self
             .sink
@@ -221,12 +234,14 @@ impl XmlParser {
         types: HashMap<String, FieldKind>,
         keep: Option<HashSet<String>>,
         strict: bool,
+        identity: bool,
     ) -> Self {
         Self {
             sep: separator_tag.as_bytes().to_vec(),
             types,
             keep,
             strict,
+            identity,
             stats: Arc::new(ColumnarStats::default()),
         }
     }
@@ -278,6 +293,7 @@ impl XmlParser {
             let mut emitter = RowEmitter {
                 sink: &mut *sink,
                 types: &self.types,
+                identity: self.identity,
                 ordinal: 0,
             };
             // Fused scan + parse: one pass over the item's bytes. A malformed

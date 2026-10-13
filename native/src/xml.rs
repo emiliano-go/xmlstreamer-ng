@@ -10,6 +10,33 @@ const NAME_STOP: [u8; 10] = [
     b' ', b'\t', b'\r', b'\n', b'=', b'/', b'<', b'>', b'"', b'\'',
 ];
 
+// 256-entry lookup tables: the per-byte `slice.contains` scans these arrays
+// linearly on every name/whitespace byte; a table lookup is a single load.
+const fn build_lut(bytes: &[u8]) -> [bool; 256] {
+    let mut table = [false; 256];
+    let mut i = 0;
+    while i < bytes.len() {
+        table[bytes[i] as usize] = true;
+        i += 1;
+    }
+    table
+}
+static XML_WS_LUT: [bool; 256] = build_lut(&XML_WHITESPACE);
+static NAME_STOP_LUT: [bool; 256] = build_lut(&NAME_STOP);
+static NAME_START_LUT: [bool; 256] = build_lut(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:");
+static NAME_CHAR_LUT: [bool; 256] =
+    build_lut(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:-.0123456789");
+
+#[inline]
+fn is_xml_ws(b: u8) -> bool {
+    XML_WS_LUT[b as usize]
+}
+
+#[inline]
+fn is_name_stop(b: u8) -> bool {
+    NAME_STOP_LUT[b as usize]
+}
+
 // ---------------------------------------------------------------------------
 // XML 1.0 character and name rules
 // ---------------------------------------------------------------------------
@@ -45,14 +72,11 @@ pub fn is_xml_name(raw: &[u8]) -> bool {
         return false;
     }
     // ASCII fast path: most names never touch the Unicode tables.
-    if raw.iter().all(|b| b.is_ascii()) {
-        let first = raw[0];
-        if !(first.is_ascii_alphabetic() || first == b'_' || first == b':') {
+    if raw.is_ascii() {
+        if !NAME_START_LUT[raw[0] as usize] {
             return false;
         }
-        return raw[1..].iter().all(|&b| {
-            b.is_ascii_alphanumeric() || matches!(b, b'_' | b':' | b'-' | b'.')
-        });
+        return raw[1..].iter().all(|&b| NAME_CHAR_LUT[b as usize]);
     }
     let s = match std::str::from_utf8(raw) {
         Ok(s) => s,
@@ -152,10 +176,23 @@ pub fn attvalue_is_well_formed(value: &[u8]) -> bool {
 
 fn name_end(tag: &[u8], mut pos: usize, end: usize) -> i64 {
     let start = pos;
-    while pos < end && !NAME_STOP.contains(&tag[pos]) {
+    let mut non_ascii = false;
+    while pos < end && !is_name_stop(tag[pos]) {
+        non_ascii |= tag[pos] >= 0x80;
         pos += 1;
     }
-    if pos == start || !is_xml_name(&tag[start..pos]) {
+    if pos == start {
+        return -1;
+    }
+    let raw = &tag[start..pos];
+    // The scan above already knows whether the name left ASCII; revalidate
+    // without re-walking when it did not.
+    let ok = if !non_ascii {
+        NAME_START_LUT[raw[0] as usize] && raw[1..].iter().all(|&b| NAME_CHAR_LUT[b as usize])
+    } else {
+        is_xml_name(raw)
+    };
+    if !ok {
         return -1;
     }
     pos as i64
@@ -179,7 +216,7 @@ pub fn start_tag_is_well_formed(tag: &[u8]) -> bool {
     let mut idx = *p as usize;
     while idx < end {
         let mut spaced = false;
-        while idx < end && XML_WHITESPACE.contains(&tag[idx]) {
+        while idx < end && is_xml_ws(tag[idx]) {
             idx += 1;
             spaced = true;
         }
@@ -199,14 +236,14 @@ pub fn start_tag_is_well_formed(tag: &[u8]) -> bool {
         }
         seen.push(name);
         idx = stop as usize;
-        while idx < end && XML_WHITESPACE.contains(&tag[idx]) {
+        while idx < end && is_xml_ws(tag[idx]) {
             idx += 1;
         }
         if idx >= end || tag[idx] != b'=' {
             return false;
         }
         idx += 1;
-        while idx < end && XML_WHITESPACE.contains(&tag[idx]) {
+        while idx < end && is_xml_ws(tag[idx]) {
             idx += 1;
         }
         if idx >= end {
@@ -228,6 +265,95 @@ pub fn start_tag_is_well_formed(tag: &[u8]) -> bool {
     true
 }
 
+/// Strict-validate a start tag and return its name span `(start, end)` in
+/// one pass (the unfused pair re-scans the name). `tag` includes `<` and `>`.
+pub fn start_tag_checked_name(tag: &[u8]) -> Option<(usize, usize)> {
+    if tag.len() < 2 || tag[0] != b'<' || tag[tag.len() - 1] != b'>' {
+        return None;
+    }
+    let mut end = tag.len() - 1; // the closing ">"
+    if end > 0 && tag[end - 1] == b'/' {
+        end -= 1; // empty-element tag: "/>" carries no space between
+    }
+    let pos = name_end(tag, 1, end);
+    if pos == -1 {
+        return None;
+    }
+    let mut seen: Vec<&[u8]> = Vec::new();
+    let mut idx = pos as usize;
+    while idx < end {
+        let mut spaced = false;
+        while idx < end && is_xml_ws(tag[idx]) {
+            idx += 1;
+            spaced = true;
+        }
+        if idx >= end {
+            return Some((1, pos as usize));
+        }
+        if !spaced {
+            return None;
+        }
+        let stop = name_end(tag, idx, end);
+        if stop == -1 {
+            return None;
+        }
+        let name = &tag[idx..stop as usize];
+        if seen.contains(&name) {
+            return None;
+        }
+        seen.push(name);
+        idx = stop as usize;
+        while idx < end && is_xml_ws(tag[idx]) {
+            idx += 1;
+        }
+        if idx >= end || tag[idx] != b'=' {
+            return None;
+        }
+        idx += 1;
+        while idx < end && is_xml_ws(tag[idx]) {
+            idx += 1;
+        }
+        if idx >= end {
+            return None;
+        }
+        let quote = tag[idx];
+        if quote != b'"' && quote != b'\'' {
+            return None;
+        }
+        let close = match memchr::memchr(quote, &tag[idx + 1..end]) {
+            Some(r) => idx + 1 + r,
+            None => return None,
+        };
+        if !attvalue_is_well_formed(&tag[idx + 1..close]) {
+            return None;
+        }
+        idx = close + 1;
+    }
+    Some((1, pos as usize))
+}
+
+/// Strict-validate an end tag and return its name span `(start, end)` in
+/// one pass. `tag` includes `</` and `>`.
+pub fn end_tag_checked_name(tag: &[u8]) -> Option<(usize, usize)> {
+    if tag.len() < 3 || tag[0] != b'<' || tag[1] != b'/' || tag[tag.len() - 1] != b'>'
+    {
+        return None;
+    }
+    let end = tag.len() - 1;
+    let pos = name_end(tag, 2, end);
+    if pos == -1 {
+        return None;
+    }
+    let mut idx = pos as usize;
+    while idx < end && is_xml_ws(tag[idx]) {
+        idx += 1;
+    }
+    if idx != end {
+        return None;
+    }
+    Some((2, pos as usize))
+}
+
 /// An end tag carries a name, optional whitespace, and nothing else.
 pub fn end_tag_is_well_formed(tag: &[u8]) -> bool {
     if tag.len() < 3 || tag[0] != b'<' || tag[1] != b'/' || tag[tag.len() - 1] != b'>'
@@ -240,7 +366,7 @@ pub fn end_tag_is_well_formed(tag: &[u8]) -> bool {
         return false;
     }
     let mut idx = pos as usize;
-    while idx < end && XML_WHITESPACE.contains(&tag[idx]) {
+    while idx < end && is_xml_ws(tag[idx]) {
         idx += 1;
     }
     idx == end
@@ -338,7 +464,7 @@ pub fn parse_document(doc: &[u8]) -> DocResult {
             if stack.is_empty() {
                 // Outside the root: whitespace only.
                 while i < n && doc[i] != b'<' {
-                    if !XML_WHITESPACE.contains(&doc[i]) {
+                    if !is_xml_ws(doc[i]) {
                         return err();
                     }
                     i += 1;
@@ -538,14 +664,13 @@ fn find_tag_end(bytes: &[u8], from: usize) -> Option<usize> {
     let mut i = from;
     let n = bytes.len();
     while i < n {
-        match bytes[i] {
-            b'>' => return Some(i + 1),
-            b'"' | b'\'' => {
-                let quote = bytes[i];
-                let close = memchr::memchr(quote, &bytes[i + 1..])?;
-                i = i + 1 + close + 1;
+        let idx = i + memchr::memchr3(b'>', b'"', b'\'', &bytes[i..])?;
+        match bytes[idx] {
+            b'>' => return Some(idx + 1),
+            quote => {
+                let close = memchr::memchr(quote, &bytes[idx + 1..])?;
+                i = close + idx + 2;
             }
-            _ => i += 1,
         }
     }
     None
@@ -581,7 +706,7 @@ fn end_tag_name(tag: &[u8]) -> &[u8] {
 
 fn is_self_closing(tag: &[u8]) -> bool {
     let mut end = tag.len() - 1; // '>'
-    while end > 0 && XML_WHITESPACE.contains(&tag[end - 1]) {
+    while end > 0 && is_xml_ws(tag[end - 1]) {
         end -= 1;
     }
     end > 0 && tag[end - 1] == b'/'
@@ -671,7 +796,7 @@ fn pi_end(bytes: &[u8], start: usize) -> Option<usize> {
     let n = bytes.len();
     let mut i = start + 2;
     let name_start = i;
-    while i < n && !NAME_STOP.contains(&bytes[i]) && bytes[i] != b'?' {
+    while i < n && !is_name_stop(bytes[i]) && bytes[i] != b'?' {
         i += 1;
     }
     if i == name_start || !is_xml_name(&bytes[name_start..i]) {
@@ -680,7 +805,7 @@ fn pi_end(bytes: &[u8], start: usize) -> Option<usize> {
     if bytes[name_start..i].eq_ignore_ascii_case(b"xml") {
         return None;
     }
-    if i < n && bytes[i] != b'?' && !XML_WHITESPACE.contains(&bytes[i]) {
+    if i < n && bytes[i] != b'?' && !is_xml_ws(bytes[i]) {
         return None;
     }
     find_seq(bytes, i, b"?>").map(|end| end + 2)
@@ -794,9 +919,15 @@ enum KeySrc {
 pub struct Scratch {
     stack: Vec<FlatFrame>,
     pending: Vec<FlatPending>,
-    appearances: Vec<(KeySrc, usize)>,
-    emitted: Vec<KeySrc>,
+    // `(hash, key, count)`; the hash prefilters the linear scans in
+    // `number_key`, which run once per field per item.
+    appearances: Vec<(u64, KeySrc, usize)>,
+    emitted: Vec<(u64, KeySrc)>,
     key_arena: String,
+    /// `(taken, tag, renamed)` triples for keys renamed by sibling-numbering
+    /// collisions, mirroring the streaming parser's collision log. Left empty
+    /// on the columnar path, drained by the streaming tokenizer.
+    pub collisions: Vec<(String, String, String)>,
 }
 
 struct FlatFrame {
@@ -844,6 +975,25 @@ fn key_eq(a: KeySrc, b: KeySrc, content: &[u8], arena: &str) -> bool {
     key_slice(a, content, arena) == key_slice(b, content, arena)
 }
 
+/// Hash/prefilter for the bookkeeping scans in `number_key`: tags are almost
+/// always short, so eight bytes zero-padded into a u64 is a perfect hash
+/// (distinct strings give distinct values); longer keys fall back to FNV-1a.
+/// Full string comparison still runs on every hash match.
+#[inline]
+fn key_hash(key: KeySrc, content: &[u8], arena: &str) -> u64 {
+    let bytes = key_slice(key, content, arena).as_bytes();
+    if bytes.len() <= 8 {
+        let mut buf = [0u8; 8];
+        buf[..bytes.len()].copy_from_slice(bytes);
+        return u64::from_le_bytes(buf);
+    }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 /// Accumulates an element's direct character data, borrowing a single run.
 #[derive(Default)]
 struct TextBuf {
@@ -866,7 +1016,9 @@ impl TextBuf {
     }
 
     fn push_run(&mut self, content: &[u8], start: usize, end: usize) {
-        let run = std::str::from_utf8(&content[start..end]).unwrap_or("");
+        // SAFETY: `read_text_run` only hands over runs it validated (the
+        // single-pass ASCII classifier above, or `from_utf8` below).
+        let run = unsafe { std::str::from_utf8_unchecked(&content[start..end]) };
         if let Some(owned) = self.owned.as_mut() {
             owned.push_str(run);
             return;
@@ -928,37 +1080,56 @@ fn arena_key(scratch: &mut Scratch, content: &[u8], path: KeySrc, count: usize) 
 /// Build (and cache) the output key for `path`, handling sibling numbering
 /// and literal-key collisions the same way the streaming parser does.
 fn number_key(scratch: &mut Scratch, content: &[u8], path: KeySrc) -> KeySrc {
+    let path_hash = key_hash(path, content, &scratch.key_arena);
     let found = scratch
         .appearances
         .iter()
-        .position(|(k, _)| key_eq(*k, path, content, &scratch.key_arena));
+        .position(|(h, k, _)| *h == path_hash && key_eq(*k, path, content, &scratch.key_arena));
     let mut key = match found {
         Some(idx) => {
-            scratch.appearances[idx].1 += 1;
-            let count = scratch.appearances[idx].1;
+            scratch.appearances[idx].2 += 1;
+            let count = scratch.appearances[idx].2;
             arena_key(scratch, content, path, count)
         }
         None => {
-            scratch.appearances.push((path, 0));
+            scratch.appearances.push((path_hash, path, 0));
             path
         }
     };
+    let mut key_hash_v = key_hash(key, content, &scratch.key_arena);
+    let mut taken: Option<String> = None;
     loop {
         let collision = scratch
             .emitted
             .iter()
-            .any(|k| key_eq(*k, key, content, &scratch.key_arena));
+            .any(|(h, k)| *h == key_hash_v && key_eq(*k, key, content, &scratch.key_arena));
         if !collision {
             break;
+        }
+        if taken.is_none() {
+            taken = Some(key_slice(key, content, &scratch.key_arena).to_string());
         }
         let idx = scratch
             .appearances
             .iter()
-            .position(|(k, _)| key_eq(*k, path, content, &scratch.key_arena))
+            .position(|(h, k, _)| {
+                *h == path_hash && key_eq(*k, path, content, &scratch.key_arena)
+            })
             .unwrap();
-        scratch.appearances[idx].1 += 1;
-        let count = scratch.appearances[idx].1;
+        scratch.appearances[idx].2 += 1;
+        let count = scratch.appearances[idx].2;
         key = arena_key(scratch, content, path, count);
+        key_hash_v = key_hash(key, content, &scratch.key_arena);
+    }
+    if let Some(taken) = taken {
+        let renamed = key_slice(key, content, &scratch.key_arena).to_string();
+        let path_str = key_slice(path, content, &scratch.key_arena).to_string();
+        let tag = path_str
+            .rsplit('/')
+            .next()
+            .unwrap_or(path_str.as_str())
+            .to_string();
+        scratch.collisions.push((taken, tag, renamed));
     }
     key
 }
@@ -990,6 +1161,27 @@ fn nested_path(
     Some(KeySrc::Arena(off, len))
 }
 
+/// Whether a run contains the CDATA-close sequence `]]>`.
+#[inline]
+fn has_cdata_close(raw: &[u8]) -> bool {
+    if raw.len() >= 16 {
+        return memchr::memmem::find(raw, b"]]>").is_some();
+    }
+    if raw.len() < 3 {
+        return false;
+    }
+    // Short run: look for the rare ']' instead of sliding a 3-byte window.
+    let mut i = 0;
+    while let Some(r) = memchr::memchr(b']', &raw[i..raw.len() - 2]) {
+        let p = i + r;
+        if raw[p + 1] == b']' && raw[p + 2] == b'>' {
+            return true;
+        }
+        i = p + 1;
+    }
+    false
+}
+
 fn read_text_run(
     content: &[u8],
     mut i: usize,
@@ -1004,13 +1196,37 @@ fn read_text_run(
             i = next;
             continue;
         }
+        // SIMD-run to the end of the plain run: the old byte loop walked
+        // every character twice (here and in the validation passes below).
+        let end = match memchr::memchr2(b'<', b'&', &content[i..]) {
+            Some(r) => i + r,
+            None => n,
+        };
         let start = i;
-        while i < n && content[i] != b'<' && content[i] != b'&' {
-            i += 1;
-        }
-        let raw = &content[start..i];
-        if memchr::memmem::find(raw, b"]]>").is_some() {
+        i = end;
+        let raw = &content[start..end];
+        // `]]>` in character data is an error in every mode, as before.
+        if has_cdata_close(raw) {
             return None;
+        }
+        // Single classification pass: pure ASCII needs no UTF-8 re-validation
+        // (ASCII is a subset), no CR normalization and no replacement; strict
+        // mode's control-character rule is checked in the same walk.
+        let mut non_ascii = false;
+        let mut has_cr = false;
+        let mut ctrl = false;
+        for &b in raw {
+            if b >= 0x80 {
+                non_ascii = true;
+            } else if b == b'\r' {
+                has_cr = true;
+            } else if b < 0x20 && b != b'\t' && b != b'\n' {
+                ctrl = true;
+            }
+        }
+        if !non_ascii && !has_cr && !(strict && ctrl) {
+            target.push_run(content, start, end);
+            continue;
         }
         match std::str::from_utf8(raw) {
             Ok(run) => {
@@ -1022,7 +1238,7 @@ fn read_text_run(
                     push_normalized(&mut normalized, run);
                     target.push_owned(content, normalized);
                 } else {
-                    target.push_run(content, start, i);
+                    target.push_run(content, start, end);
                 }
             }
             Err(_) => {
@@ -1136,6 +1352,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
     scratch.appearances.clear();
     scratch.emitted.clear();
     scratch.key_arena.clear();
+    scratch.collisions.clear();
 
     let n = bytes.len();
     let mut i = start;
@@ -1215,18 +1432,18 @@ pub fn parse_item_fused<E: FlatEmitter>(
                 }
                 return finish_item(scratch, bytes, sep, &mut root, seen_child, emitter, end);
             }
-            if !end_tag_is_well_formed(tag) {
+            let Some((ns, ne)) = end_tag_checked_name(tag) else {
                 return Fused::Malformed;
-            }
-            let name = end_tag_name(tag);
+            };
             let frame = scratch.stack.pop().unwrap();
-            if name != &bytes[frame.tag.0..frame.tag.1] {
+            if tag[ns..ne] != bytes[frame.tag.0..frame.tag.1] {
                 return Fused::Malformed;
             }
             i = end;
             let value = frame.text.into_pending();
             if !frame.has_children || !pending_trim_is_empty(&value, bytes) {
-                scratch.emitted.push(frame.key);
+                let h = key_hash(frame.key, bytes, &scratch.key_arena);
+                scratch.emitted.push((h, frame.key));
                 scratch.pending.push(FlatPending {
                     key: frame.key,
                     value,
@@ -1240,22 +1457,22 @@ pub fn parse_item_fused<E: FlatEmitter>(
             None => return Fused::Incomplete,
         };
         let tag = &bytes[i..end];
-        let tag_ok = if strict {
-            start_tag_is_well_formed(tag)
+        // `name_end` (inside both checked and fast name scans) already proved
+        // the name bytes are a valid XML name, hence valid UTF-8; no
+        // re-validation is needed here.
+        let name: &str = if strict {
+            // One pass validates the tag and locates the name.
+            match start_tag_checked_name(tag) {
+                Some((s, e)) => unsafe { std::str::from_utf8_unchecked(&tag[s..e]) },
+                None => return Fused::Malformed,
+            }
         } else {
             // Fast mode: validate the element name, skip attribute-value
             // well-formedness (a trusted-feed optimization).
-            start_tag_name(tag).is_some()
-        };
-        if !tag_ok {
-            return Fused::Malformed;
-        }
-        let name = match start_tag_name(tag) {
-            Some(raw) => match std::str::from_utf8(raw) {
-                Ok(s) => s,
-                Err(_) => return Fused::Malformed,
-            },
-            None => return Fused::Malformed,
+            match start_tag_name(tag) {
+                Some(raw) => unsafe { std::str::from_utf8_unchecked(raw) },
+                None => return Fused::Malformed,
+            }
         };
         let tag_span = (i + 1, i + 1 + name.len());
         let self_closing = is_self_closing(tag);
@@ -1265,16 +1482,18 @@ pub fn parse_item_fused<E: FlatEmitter>(
         // kept so later siblings number as before. Strict mode only skips an
         // empty leaf, so no unvalidated content can slip through; fast mode
         // (the caller opted out of validation) skips any leaf.
-        if scratch.stack.is_empty() && !self_closing && !emitter.wants(name) {
+        if keep.is_some() && scratch.stack.is_empty() && !self_closing && !emitter.wants(name)
+        {
             let path = KeySrc::Content(tag_span.0, tag_span.1);
+            let path_hash = key_hash(path, bytes, &scratch.key_arena);
             let first = !scratch
                 .appearances
                 .iter()
-                .any(|(k, _)| key_eq(*k, path, bytes, &scratch.key_arena))
+                .any(|(h, k, _)| *h == path_hash && key_eq(*k, path, bytes, &scratch.key_arena))
                 && !scratch
                     .emitted
                     .iter()
-                    .any(|k| key_eq(*k, path, bytes, &scratch.key_arena));
+                    .any(|(h, k)| *h == path_hash && key_eq(*k, path, bytes, &scratch.key_arena));
             if first {
                 if let Some(lt) = rypipe_core::scan::find(bytes, end, b'<') {
                     let after = lt + 2;
@@ -1285,7 +1504,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
                         && &bytes[after..after + tag_bytes.len()] == tag_bytes
                         && bytes[after + tag_bytes.len()] == b'>'
                     {
-                        scratch.appearances.push((path, 0));
+                        scratch.appearances.push((path_hash, path, 0));
                         seen_child = true;
                         i = after + tag_bytes.len() + 1;
                         continue;
@@ -1339,7 +1558,8 @@ pub fn parse_item_fused<E: FlatEmitter>(
             let frame = scratch.stack.pop().unwrap();
             let value = frame.text.into_pending();
             if !frame.has_children || !pending_trim_is_empty(&value, bytes) {
-                scratch.emitted.push(frame.key);
+                let h = key_hash(frame.key, bytes, &scratch.key_arena);
+                scratch.emitted.push((h, frame.key));
                 scratch.pending.push(FlatPending {
                     key: frame.key,
                     value,

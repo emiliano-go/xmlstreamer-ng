@@ -6,9 +6,30 @@
 //! for more with a distinct status. The scanning cursors only move forward,
 //! so a huge comment or attribute value costs one pass, not one per refill.
 
-use std::collections::VecDeque;
-
 use crate::xml;
+
+/// Collects the fields of one item into the owned `(key, value)` pairs the
+/// streaming record carries across the FFI boundary. Numbering collisions
+/// are recorded on the `Scratch`, not here.
+#[derive(Default)]
+pub struct FieldCollector {
+    pub fields: Vec<(String, String)>,
+}
+
+impl xml::FlatEmitter for FieldCollector {
+    #[inline]
+    fn row_start(&mut self) {
+        // One vec allocation per item, not a grow chain: field counts are
+        // small and stable within a feed.
+        self.fields.reserve(8);
+    }
+    #[inline]
+    fn row_end(&mut self) {}
+    #[inline]
+    fn field(&mut self, name: &str, value: &str) {
+        self.fields.push((name.to_string(), value.to_string()));
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum State {
@@ -78,8 +99,8 @@ const LONGEST_SECTION_PREFIX: usize = 9;
 
 pub struct Engine {
     sep: Vec<u8>,
+    sep_str: String,
     buffer: Vec<u8>,
-    chunks: VecDeque<Vec<u8>>,
     eof_input: bool,
 
     pos: usize,
@@ -103,17 +124,21 @@ pub struct Engine {
     tag_scan: usize,
     tag_quote: u8,
 
-    buffer_size: usize,
     timed_out: bool,
     malformed_tags: usize,
     logs: Vec<Log>,
     pending: Option<PendingItem>,
+    scratch: xml::Scratch,
+    // Whether bytes arrived since the last feed_origin_buffer pass: the
+    // original chunk-queue version could tell "new content" from "nothing
+    // new", and the EOF/NeedMore decision depends on it.
+    grew: bool,
 }
 
 impl Engine {
     pub fn new(
         separator_tag: &str,
-        buffer_size: usize,
+        _buffer_size: usize,
         max_section_size: i64,
         on_limit_text: bool,
         deadline_secs: Option<f64>,
@@ -125,8 +150,8 @@ impl Engine {
         });
         Engine {
             sep: separator_tag.as_bytes().to_vec(),
+            sep_str: separator_tag.to_string(),
             buffer: Vec::new(),
-            chunks: VecDeque::new(),
             eof_input: false,
             pos: 0,
             scan: 0,
@@ -145,16 +170,21 @@ impl Engine {
             tag_open_at: -1,
             tag_scan: 0,
             tag_quote: 0,
-            buffer_size,
             timed_out: false,
             malformed_tags: 0,
             logs: Vec::new(),
             pending: None,
+            scratch: xml::Scratch::default(),
+            grew: false,
         }
     }
 
     pub fn feed(&mut self, chunk: &[u8]) {
-        self.chunks.push_back(chunk.to_vec());
+        // The engine absorbs every fed byte (parse_available reports full
+        // consumption), so appending straight into the scan buffer saves the
+        // intermediate chunk queue copy.
+        self.buffer.extend_from_slice(chunk);
+        self.grew = true;
     }
 
     pub fn finish(&mut self) {
@@ -236,7 +266,8 @@ impl Engine {
                         let closing = self.buffer[m.start..m.end].to_vec();
                         self.check_delimiter(&closing, xml::end_tag_is_well_formed);
                     }
-                    let content: Vec<u8> = self.buffer[self.pos..m.start].to_vec();
+                    let content_start = self.pos;
+                    let content: Vec<u8> = self.buffer[content_start..m.start].to_vec();
                     self.pos = m.end;
                     self.scan = m.end;
 
@@ -245,8 +276,43 @@ impl Engine {
                         return Flow::Continue;
                     }
 
-                    let (parsed, replaced, collisions) =
-                        parse_wrapped(&content, &self.sep);
+                    // Fast path: the borrow-first fused parser walks the item
+                    // in place (no wrapped copy, no per-field HashMaps). Any
+                    // non-Complete outcome falls back to the legacy whole-doc
+                    // parser so behavior stays byte-for-byte what it was.
+                    let mut collector = FieldCollector::default();
+                    let mut ignored_malformed = 0u64;
+                    let outcome = if has_nested_separator(&content, &self.sep) {
+                        xml::Fused::Malformed
+                    } else {
+                        xml::parse_item_fused(
+                            &mut self.scratch,
+                            &self.buffer,
+                            content_start,
+                            &self.sep_str,
+                            None,
+                            true,
+                            &mut collector,
+                            &mut ignored_malformed,
+                        )
+                    };
+                    let (parsed, replaced, collisions) = match outcome {
+                        xml::Fused::Complete { .. } => {
+                            if collector.fields.is_empty() {
+                                self.state = State::SeekOpen;
+                                return Flow::Continue;
+                            }
+                            let replaced = std::str::from_utf8(&content).is_err();
+                            let collisions =
+                                std::mem::take(&mut self.scratch.collisions);
+                            (
+                                Some(collector.fields),
+                                replaced,
+                                collisions,
+                            )
+                        }
+                        _ => parse_wrapped(&content, &self.sep),
+                    };
                     if let Some(ref p) = parsed {
                         let only_wrapper = p.len() == 1
                             && p[0].0.as_bytes() == self.sep.as_slice()
@@ -304,28 +370,24 @@ impl Engine {
             }
             self.pos = 0;
         }
-        let mut content_present = false;
-        while self.buffer.len() < self.buffer_size || !content_present {
-            if let Some(deadline) = self.deadline {
-                if std::time::Instant::now() > deadline {
-                    self.timed_out = true;
-                    self.logs.push(Log::FeedTimeout);
-                    return Flow::Eof;
-                }
-            }
-            if let Some(chunk) = self.chunks.pop_front() {
-                self.buffer.extend_from_slice(&chunk);
-                content_present = true;
-            } else if self.eof_input {
-                break;
-            } else {
-                return Flow::NeedMore;
+        if let Some(deadline) = self.deadline {
+            if std::time::Instant::now() > deadline {
+                self.timed_out = true;
+                self.logs.push(Log::FeedTimeout);
+                return Flow::Eof;
             }
         }
-        if content_present {
+        // Bytes arrive by direct append in `feed`; this pass only decides
+        // whether enough is buffered to scan (or the feed is over). Exactly
+        // what the chunk-queue version did: new bytes mean "rescan", nothing
+        // new means NeedMore (or Eof once the feed is finished).
+        if self.grew {
+            self.grew = false;
             Flow::Continue
-        } else {
+        } else if self.eof_input {
             Flow::Eof
+        } else {
+            Flow::NeedMore
         }
     }
 
@@ -731,6 +793,26 @@ impl Engine {
             discarded: self.buffer.len() - open_at,
         });
     }
+}
+
+/// Whether the item content holds a nested separator tag. The streaming
+/// contract rejects those, and the legacy wrapped-document parser (whose
+/// extra closing tag unbalances any nested separator element) is the
+/// authority on the outcome, so the fast path stands down.
+fn has_nested_separator(content: &[u8], sep: &[u8]) -> bool {
+    let mut needle = Vec::with_capacity(sep.len() + 1);
+    needle.push(b'<');
+    needle.extend_from_slice(sep);
+    let mut search = 0;
+    while let Some(r) = memchr::memmem::find(&content[search..], &needle) {
+        let p = search + r;
+        match content.get(p + needle.len()) {
+            Some(b'>') | Some(b'/') => return true,
+            Some(&b) if is_ws(b) => return true,
+            _ => search = p + 1,
+        }
+    }
+    false
 }
 
 fn parse_wrapped(

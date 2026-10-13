@@ -5,8 +5,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList};
 
 use rypipe_core::{
-    MemoryBudget, ParallelStreamOpts, ParallelStreamingBatchIterator, ParseDiagnostics, Pipeline,
-    RecordStream as CoreRecordStream, StreamState,
+    ExecutionPlan, MemoryBudget, ParallelStreamOpts, ParallelStreamingBatchIterator,
+    ParseDiagnostics, Pipeline, RecordStream as CoreRecordStream, StreamState,
 };
 use rypipe_python::{
     execution_plan_from_kwargs, py_err_from_rypipe, record_batch_to_pyarrow,
@@ -64,6 +64,16 @@ fn memory_bytes(value: &Bound<'_, PyAny>) -> PyResult<usize> {
         }
     };
     Ok(((num * mult) as usize).max(1))
+}
+
+/// Whether the plan can only resolve a field to itself: no rename, drop,
+/// projection or filter. `ColumnarSink::wants` is unconditionally true then,
+/// which lets the parser skip a hash-heavy resolve per field.
+fn plan_is_identity(plan: &ExecutionPlan) -> bool {
+    plan.field_map.is_empty()
+        && plan.drop_fields.is_empty()
+        && plan.schema_order.is_empty()
+        && plan.filter.is_none()
 }
 
 /// Parse a whole item document into `(flat_dict_or_None, collisions)`.
@@ -289,15 +299,19 @@ impl RecordStream {
         Ok(list)
     }
 
-    fn next_item<'py>(&mut self, py: Python<'py>) -> PyResult<(u8, Py<PyAny>)> {
+    /// `(status, payload, has_logs)`: status 2 carries an item, 1 asks for
+    /// more bytes, 0 is EOF. Reporting `has_logs` with the item saves the
+    /// Python loop a separate `has_logs()` FFI call per item.
+    fn next_item<'py>(&mut self, py: Python<'py>) -> PyResult<(u8, Py<PyAny>, bool)> {
         loop {
             if let Some(record) = self.queue.pop_front() {
-                return Ok((2, record_to_py(py, record)?));
+                let item = record_to_py(py, record)?;
+                return Ok((2, item, self.has_logs()));
             }
             // The parser can finish on its own (time budget exhausted) while
             // the driver still has bytes to pull: end the iteration there.
             if self.inner.parser().state_eof() {
-                return Ok((0, py.None()));
+                return Ok((0, py.None(), self.has_logs()));
             }
             let mut out: Vec<StreamRecord> = Vec::new();
             let state = self
@@ -308,9 +322,9 @@ impl RecordStream {
             let has_queued = !self.queue.is_empty();
             match state {
                 StreamState::Eof if has_queued => continue,
-                StreamState::Eof => return Ok((0, py.None())),
+                StreamState::Eof => return Ok((0, py.None(), self.has_logs())),
                 StreamState::NeedMore if has_queued => continue,
-                StreamState::NeedMore => return Ok((1, py.None())),
+                StreamState::NeedMore => return Ok((1, py.None(), self.has_logs())),
                 StreamState::Rows => continue,
             }
         }
@@ -391,7 +405,8 @@ fn read_xml(
         min_chunk_bytes,
         observer.as_ref(),
     )?;
-    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let identity = plan_is_identity(&plan);
+    let parser = XmlParser::new(&separator_tag, types, keep, strict, identity);
     let stats = parser.stats();
     let batch = py
         .detach(|| {
@@ -459,7 +474,8 @@ fn read_xml_par(
         min_chunk_bytes,
         observer.as_ref(),
     )?;
-    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let identity = plan_is_identity(&plan);
+    let parser = XmlParser::new(&separator_tag, types, keep, strict, identity);
     let stats = parser.stats();
     let batches = py
         .detach(|| {
@@ -533,7 +549,8 @@ fn read_xml_stream(
         min_chunk_bytes,
         observer.as_ref(),
     )?;
-    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let identity = plan_is_identity(&plan);
+    let parser = XmlParser::new(&separator_tag, types, keep, strict, identity);
     let stats = parser.stats();
     let batches = py
         .detach(|| {
@@ -662,7 +679,8 @@ fn iter_xml_batches_par(
         max_reorder: 0,
         schema: None,
     };
-    let parser = XmlParser::new(&separator_tag, types, keep, strict);
+    let identity = plan_is_identity(&plan);
+    let parser = XmlParser::new(&separator_tag, types, keep, strict, identity);
     let stats = parser.stats();
     let inner = ParallelStreamingBatchIterator::new(
         std::path::PathBuf::from(&path),
