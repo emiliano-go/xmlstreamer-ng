@@ -1,4 +1,4 @@
-# xmlstreamer benchmarks
+# xmlstreamer-ng benchmarks
 
 Reproducible comparison against lxml, the stdlib and xmltodict, on three
 axes: speed, peak memory, and behavior on broken input. Everything

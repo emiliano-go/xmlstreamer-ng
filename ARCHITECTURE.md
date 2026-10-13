@@ -5,7 +5,7 @@ which invariants a change must preserve.
 
 > **Engine location.** The byte-level tokenizer and the per-item parse
 > run in the Rust engine under `native/` (built on `rypipe-core`,
-> compiled to `xmlstreamer._xmlstreamer`). `xmlstreamer/__init__.py` is
+> compiled to `xmlstreamer_ng._xmlstreamer`). `xmlstreamer_ng/__init__.py` is
 > the configuration, acquisition and API surface; it drives the engine
 > across the FFI boundary and logs what the engine reports. The two-layer
 > design and every invariant below are unchanged: the Rust scanner
@@ -248,7 +248,7 @@ pinned by tests (`tests/`), including generative ones (Hypothesis).
 
 ## Map of the source
 
-`xmlstreamer/__init__.py`, in reading order:
+`xmlstreamer_ng/__init__.py`, in reading order:
 
 1. Errors (`XMLStreamerError` family) and auth/`Transport` dataclasses.
 2. Acquisition plumbing: `download_file` / `_stream_feed_generator` /
@@ -282,7 +282,7 @@ historical Python warnings byte for byte (`DiagSink` in `lib.rs`), so
 the log a user reads is identical to the pre-Rust library's; the
 `stream_parser.rs` warning table is the parity contract.
 
-`xmlstreamer/__main__.py` is the CLI: a thin argparse wrapper that
+`xmlstreamer_ng/__main__.py` is the CLI: a thin argparse wrapper that
 streams items as JSON Lines or raw bytes. It uses only the public API.
 
 ## Safety nets

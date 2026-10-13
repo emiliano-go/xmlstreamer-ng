@@ -1,4 +1,4 @@
-# Contributing to xmlstreamer
+# Contributing to xmlstreamer-ng
 
 Thanks for your interest. A few honest notes before you invest time, so
 your effort lands well.
@@ -14,7 +14,7 @@ code. When filing one:
 - Reduce the feed to the smallest snippet that reproduces the problem
   (a handful of items is usually enough), and redact any private data.
 - Include what you expected, what happened, and the WARNING lines from
-  the `xmlstreamer` logger if any.
+  the `xmlstreamer_ng` logger if any.
 
 ## Pull requests
 
@@ -36,7 +36,7 @@ Before submitting:
 - Run the test suite on both supported floors:
   `uv run pytest tests/ -q` and
   `uv run --isolated -p 3.11 pytest tests/ -q`.
-- Lint gate: `uvx ruff check --select F401,F811,F841 xmlstreamer/ tests/`.
+- Lint gate: `uvx ruff check --select F401,F811,F841 xmlstreamer_ng/ tests/`.
 - If you touch `COOKBOOK.md`, its snippets are executed by
   `tests/test_cookbook.py`; if you touch `benchmarks/`, run
   `uv run --group bench python benchmarks/run_all.py --quick`.

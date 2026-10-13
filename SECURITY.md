@@ -1,6 +1,6 @@
 # Security Policy
 
-xmlstreamer exists to parse untrusted XML from remote sources, so
+xmlstreamer-ng exists to parse untrusted XML from remote sources, so
 security reports are taken seriously.
 
 ## Reporting a vulnerability

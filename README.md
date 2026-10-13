@@ -78,7 +78,7 @@ need no toolchain, but building from source needs a Rust toolchain (1.78+).
 ## Usage
 
 ```python
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 interpreter = StreamInterpreter(
     url="https://example.com/large-feed.xml",
@@ -100,7 +100,7 @@ built on [rypipe](https://github.com/emiliano-go/rypipe), producing Arrow
 tables:
 
 ```python
-from xmlstreamer import XmlSource, CastTypes, FilterRows, col
+from xmlstreamer_ng import XmlSource, CastTypes, FilterRows, col
 
 table = XmlSource("feed.xml", separator_tag="item").to_arrow()
 
@@ -116,7 +116,7 @@ for batch in XmlSource("big.xml", separator_tag="item").iter_record_batches(thre
 
 `XmlSource` follows the rypipe adapter contract (`schema`, `field_types`,
 `drop_fields`, `filter`, `engine`/`threads`, `memory`), and importing
-`xmlstreamer` registers it so `rypipe.read("feed.xml", separator_tag="item")`
+`xmlstreamer_ng` registers it so `rypipe.read("feed.xml", separator_tag="item")`
 works too.
 
 Local data uses the same pipeline: pass `source=` instead of `url=` - a
@@ -131,20 +131,20 @@ second run raises instead of yielding zero items.
 The package doubles as a diagnostic tool: stream any feed to JSON Lines without writing code.
 
 ```bash
-uvx xmlstreamer https://example.com/large-feed.xml --tag item --limit 5
+uvx xmlstreamer-ng https://example.com/large-feed.xml --tag item --limit 5
 ```
 
 The positional argument is a URL, a local file path, or `-` for stdin, so the same tool replays a saved feed and composes in shell pipelines:
 
 ```bash
-xmlstreamer saved-feed.xml --tag item
-curl -s https://example.com/large-feed.xml | xmlstreamer - --tag item
+xmlstreamer-ng saved-feed.xml --tag item
+curl -s https://example.com/large-feed.xml | xmlstreamer-ng - --tag item
 ```
 
 One JSON object per line on stdout, ready to pipe into `jq`, a file, or whatever sits downstream. In [Nushell](https://www.nushell.sh/) that stream becomes a native table in one pipeline - type the fields, filter, group and export from there (values arrive as strings, so promote what you need):
 
 ```nushell
-xmlstreamer https://example.com/large-feed.xml --tag item
+xmlstreamer-ng https://example.com/large-feed.xml --tag item
 | from json --objects
 | update price {|r| $r.price | into float}
 | where price < 10
@@ -240,7 +240,7 @@ adds the raw throughput without giving that up.
 Everything about how the feed is reached lives in a single `Transport` object: user agent, auth, requests-style proxy dict, timeouts and download mode. Omit it entirely and the defaults apply.
 
 ```python
-from xmlstreamer import BearerAuth, StreamInterpreter, Transport
+from xmlstreamer_ng import BearerAuth, StreamInterpreter, Transport
 
 interpreter = StreamInterpreter(
     url=url,
@@ -261,7 +261,7 @@ interpreter = StreamInterpreter(
 By default the feed is spooled to a temporary file before parsing (`Transport(download_mode="temp")`): network errors surface before the first item, and a failed download yields nothing. With `Transport(download_mode="stream")` the bytes flow straight from the network to the parser - no temp file (nothing in TMPDIR), memory bounded by the largest single item (or the largest tag or markup section, whichever is bigger, the latter capped by `Sections(max_size=...)`) plus fixed buffers, rather than by the feed size, and first items before the download finishes - in exchange for a different error contract: a connection lost mid-feed raises `FeedInterruptedError` from the iteration, carrying `items_delivered` and the original network error chained as `__cause__`. Failures before the first item (connecting, HTTP errors, the initial encoding-detection read) keep their raw exception type in both modes.
 
 ```python
-from xmlstreamer import FeedInterruptedError, StreamInterpreter, Transport
+from xmlstreamer_ng import FeedInterruptedError, StreamInterpreter, Transport
 
 interpreter = StreamInterpreter(
     url=url, separator_tag="book", transport=Transport(download_mode="stream")
@@ -297,10 +297,10 @@ Programming mistakes stay plain Python and are deliberately outside that family,
 
 ## Nested output (opt-in)
 
-Items are flat `{path: text}` dicts by default (`item["publisher/city"]`), which is the stable, primitive form. An item made of bare text rather than fields (`<isbn>978-0-1</isbn>` with `separator_tag="isbn"`) comes out keyed by that same tag: `{"isbn": "978-0-1"}`. If you prefer nested dicts, pass `output=Nested()` (or call `xmlstreamer.to_nested(item)` on any flat item):
+Items are flat `{path: text}` dicts by default (`item["publisher/city"]`), which is the stable, primitive form. An item made of bare text rather than fields (`<isbn>978-0-1</isbn>` with `separator_tag="isbn"`) comes out keyed by that same tag: `{"isbn": "978-0-1"}`. If you prefer nested dicts, pass `output=Nested()` (or call `xmlstreamer_ng.to_nested(item)` on any flat item):
 
 ```python
-from xmlstreamer import Nested, StreamInterpreter
+from xmlstreamer_ng import Nested, StreamInterpreter
 
 interpreter = StreamInterpreter(url=url, separator_tag="book", output=Nested())
 for item in interpreter:
@@ -327,7 +327,7 @@ for item in interpreter:
 `output=Raw()` delivers each item as bytes instead of a dict: the slice between the item's separator tags, exactly as the parser would receive it - after transparent gunzip, after stream-level normalization to UTF-8, before any per-item repair, and never re-serialized. Selection does not change - an item that does not parse is still dropped with a warning, and `item_filter` still sees the flat dict - only the representation does. The separator tags themselves (and any attributes on them) are not part of the slice.
 
 ```python
-from xmlstreamer import Raw, StreamInterpreter
+from xmlstreamer_ng import Raw, StreamInterpreter
 
 interpreter = StreamInterpreter(
     source="saved-feed.xml", separator_tag="book", output=Raw()
@@ -345,7 +345,7 @@ Type checkers follow the mode: with `output=Raw()` the interpreter is a `StreamI
 Comments, CDATA, processing instructions and DOCTYPE declarations are skipped whole: a separator tag written inside one is markup, not an item. What happens when one of them never closes is the single question this library will not answer for you, because both answers are defensible and they fail in opposite directions:
 
 ```python
-from xmlstreamer import Sections, StreamInterpreter
+from xmlstreamer_ng import Sections, StreamInterpreter
 
 interpreter = StreamInterpreter(
     url=url,
@@ -362,7 +362,7 @@ Either way the decision is announced with a WARNING, and it is measured from the
 
 ## Logging
 
-xmlstreamer logs through the standard `logging` module under the `xmlstreamer` logger name (per-feed progress and encoding detection at `DEBUG`, end-of-feed stats at `INFO`, everything lossy at `WARNING`). The `WARNING` level is where the library reports what it could not keep: discarded malformed items, corrupt or truncated gzip, a feed that ends inside an item, a section that never terminates, a key collision that reshaped an item, and invalid UTF-8 replaced with `U+FFFD` (warned once per run, then counted in the closing stats line). Nothing is dropped or altered without a line in the log. To see its output:
+xmlstreamer-ng logs through the standard `logging` module under the `xmlstreamer_ng` logger name (per-feed progress and encoding detection at `DEBUG`, end-of-feed stats at `INFO`, everything lossy at `WARNING`). The `WARNING` level is where the library reports what it could not keep: discarded malformed items, corrupt or truncated gzip, a feed that ends inside an item, a section that never terminates, a key collision that reshaped an item, and invalid UTF-8 replaced with `U+FFFD` (warned once per run, then counted in the closing stats line). Nothing is dropped or altered without a line in the log. To see its output:
 
 ```python
 import logging
@@ -378,7 +378,7 @@ from datetime import datetime, timedelta
 
 import dateparser
 
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 def keep_recent(item: dict) -> bool:
     parsed = dateparser.parse(item.get("pubDate", ""))
@@ -448,7 +448,7 @@ item_filter=tolerant(keep_recent)
 `run_finished(run)` is called once when a run ends, however it ends: the feed ended, its time budget ran out, or the caller closed it. It runs after that run released its source and logged its stats, and it receives the run that ended, so its counters are the right ones even if another run is already open. Nothing needs to be raised or chained, and nothing should: the hook reports, so an exception it raises is logged at `ERROR` with its traceback and goes no further - a failed alert never undoes items already delivered:
 
 ```python
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 class AlertingStreamInterpreter(StreamInterpreter):
     def run_finished(self, run):
@@ -462,4 +462,4 @@ Bug reports with a reproducible broken feed are the most valuable contribution t
 
 ## Technical Acknowledgments
 
-The shape of this library - a byte-level tokenizer feeding a per-item interpreter - descends from Ruslan Spivak's [Let's Build A Simple Interpreter](https://ruslanspivak.com/lsbasi-part1/) series, which taught its author to think in lexers and interpreters. If you want to understand this codebase deeply, that series is the best prerequisite there is.
+xmlstreamer-ng is based on [carlosplanchon/xmlstreamer](https://github.com/carlosplanchon/xmlstreamer), the original project by Carlos A. Planchón (MIT): it keeps the streaming, item-based approach to parsing large or malformed XML feeds that this project started from. The parsing engine is built on [emiliano-go/rypipe](https://github.com/emiliano-go/rypipe) ([rypipe-core](https://crates.io/crates/rypipe-core)), whose tokenizer, splitter and per-item parsing pipeline form the Rust foundation of the extension module. The shape of the interpreter itself, a byte-level tokenizer feeding a per-item interpreter, descends from Ruslan Spivak's [Let's Build A Simple Interpreter](https://ruslanspivak.com/lsbasi-part1/) series: if you want to understand this codebase deeply, that series is the best prerequisite there is.

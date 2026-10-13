@@ -1,4 +1,4 @@
-# xmlstreamer cookbook
+# xmlstreamer-ng cookbook
 
 Task-oriented recipes. Every runnable snippet below is extracted from this
 file and executed by the test suite against a local feed server - if a
@@ -16,7 +16,7 @@ first; recipe 2 shows how to parse while it downloads.
 
 <!-- recipe: first-items -->
 ```python
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 interpreter = StreamInterpreter(url=url, separator_tag="book")
 for item in interpreter:
@@ -40,7 +40,7 @@ instead).
 
 <!-- recipe: bounded-memory -->
 ```python
-from xmlstreamer import FeedInterruptedError, StreamInterpreter, Transport
+from xmlstreamer_ng import FeedInterruptedError, StreamInterpreter, Transport
 
 interpreter = StreamInterpreter(
     url=url,
@@ -64,7 +64,7 @@ handled twice, and one flaky attempt does not cost you the healthy part.
 
 <!-- recipe: survive-cut -->
 ```python
-from xmlstreamer import FeedInterruptedError, StreamInterpreter, Transport
+from xmlstreamer_ng import FeedInterruptedError, StreamInterpreter, Transport
 
 def fetch_all(url, attempts=3):
     seen_ids = set()
@@ -99,7 +99,7 @@ schemes cover most feed APIs:
 
 <!-- recipe: auth-feeds -->
 ```python
-from xmlstreamer import ApiKeyAuth, StreamInterpreter, Transport
+from xmlstreamer_ng import ApiKeyAuth, StreamInterpreter, Transport
 
 interpreter = StreamInterpreter(
     url=url,
@@ -112,7 +112,7 @@ books = list(interpreter)
 The other schemes, plus a proxy, look like this (same `Transport` object):
 
 ```python
-from xmlstreamer import BasicAuth, BearerAuth, DigestAuth, Transport
+from xmlstreamer_ng import BasicAuth, BearerAuth, DigestAuth, Transport
 
 Transport(auth=BasicAuth("user", "password"))   # also FTP login
 Transport(auth=DigestAuth("user", "password"))
@@ -134,7 +134,7 @@ a filter, close over its configuration with `functools.partial`:
 import functools
 from datetime import datetime, timedelta
 
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 def added_after(cutoff, item):
     try:
@@ -174,7 +174,7 @@ or many.
 
 <!-- recipe: real-lists -->
 ```python
-from xmlstreamer import Nested, StreamInterpreter
+from xmlstreamer_ng import Nested, StreamInterpreter
 
 interpreter = StreamInterpreter(
     url=url,
@@ -194,7 +194,7 @@ and stops delivering, so nothing left in its buffer arrives afterwards.
 
 <!-- recipe: sample-cheaply -->
 ```python
-from xmlstreamer import StreamInterpreter, Transport
+from xmlstreamer_ng import StreamInterpreter, Transport
 
 sample = []
 with StreamInterpreter(
@@ -217,7 +217,7 @@ needs no intermediate model. This really is the whole pipeline:
 ```python
 import json
 
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 interpreter = StreamInterpreter(url=url, separator_tag="book")
 with open("books.jsonl", "w", encoding="utf-8") as out:
@@ -227,7 +227,7 @@ with open("books.jsonl", "w", encoding="utf-8") as out:
 
 ## 9. Production logging and a zero-items alert
 
-xmlstreamer logs under the `xmlstreamer` logger name: end-of-feed stats at
+xmlstreamer-ng logs under the `xmlstreamer_ng` logger name: end-of-feed stats at
 INFO, discarded malformed items and runtime cuts at WARNING. A run that
 delivers zero items is worth alerting on; hook the end of iteration to
 catch it.
@@ -236,10 +236,10 @@ catch it.
 ```python
 import logging
 
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 logging.basicConfig(level=logging.INFO)
-logging.getLogger("xmlstreamer").setLevel(logging.WARNING)
+logging.getLogger("xmlstreamer_ng").setLevel(logging.WARNING)
 
 class AlertingInterpreter(StreamInterpreter):
     def run_finished(self, run):
@@ -272,7 +272,7 @@ the next run starts with a fresh budget.
 
 <!-- recipe: time-boxed-runs -->
 ```python
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 interpreter = StreamInterpreter(
     url=url,
@@ -295,7 +295,7 @@ and the per-feed ordering guarantee is untouched.
 ```python
 from concurrent.futures import ThreadPoolExecutor
 
-from xmlstreamer import StreamInterpreter, Transport
+from xmlstreamer_ng import StreamInterpreter, Transport
 
 def fetch(url):
     interpreter = StreamInterpreter(
@@ -326,7 +326,7 @@ assumes `path` points at the saved file:
 
 <!-- recipe: replay-captured-feed -->
 ```python
-from xmlstreamer import StreamInterpreter
+from xmlstreamer_ng import StreamInterpreter
 
 with StreamInterpreter(source=path, separator_tag="book") as interpreter:
     books = list(interpreter)
