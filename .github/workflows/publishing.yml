@@ -116,7 +116,7 @@ jobs:
 
       # Trusted Publishing: the OIDC token above replaces an API token.
       # "always" fails outright if OIDC is unavailable, never falls back.
-      # --skip-existing: a re-run after a partial publish (sdist up, wheels
-      # not) must be able to complete.
+      # --check-url: a re-run after a partial publish (sdist up, wheels not)
+      # skips files already on the index instead of erroring.
       - name: Publish to PyPI
-        run: uv publish --trusted-publishing always --skip-existing
+        run: uv publish --trusted-publishing always --check-url https://pypi.org/simple/
