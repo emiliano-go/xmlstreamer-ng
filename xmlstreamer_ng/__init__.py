@@ -1252,8 +1252,9 @@ class Tokenizer:
 
     def get_item(self) -> ParsedItem | None:
         while True:
-            code, payload = self._engine.next_item()
-            self._log_engine_events()
+            code, payload, has_logs = self._engine.next_item()
+            if has_logs:
+                self._log_engine_events()
 
             if code == 0:  # EOF
                 self.PARSING_STATE = ParsingState.EOF
