@@ -195,19 +195,19 @@ the binaries are not built):
 
 | engine | items/s | MB/s | peak RSS MB | threads | API/notes |
 |---|---|---|---|---|---|
-| xmlstreamer-ng per-item | 458k | 61.6 | 76 | 1 | per-item dicts |
-| XmlSource columnar | 1.9M | 250.6 | 319 | 1 | Arrow batches |
-| XmlSource parallel (8 threads) | 9.5M | 1269.9 | 369 | 8 | Arrow batches, 8 threads |
-| XmlSource bounded parallel streaming | 8.0M | 1076.0 | 204 | 8 | bounded batches, 8 threads |
-| xmlstreamer (original) | 93k | 12.5 | 35 | 1 | per-item dicts |
-| lxml iterparse | 550k | 73.9 | 22 | 1 | iterparse + clear() |
-| stdlib ET iterparse | 302k | 40.6 | 20 | 1 | iterparse + root.clear() |
-| xmltodict | 90k | 12.0 | 471 | 1 | whole-document dict |
-| simdxml (Python) | 591k | 79.4 | 1061 | 1 | per-item dicts, whole-doc parse |
-| simdxml parallel (Python) | 555k | 74.6 | 1060 | 16 | per-item dicts, parallel SIMD parse |
-| quick-xml 0.37.5 | 3.5M | 464.6 | 300 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 2.0M | 262.4 | 722 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.5M | 339.6 | 773 | 1 | parse+count only, no data |
+| xmlstreamer-ng per-item | 460k | 61.8 | 76 | 1 | per-item dicts |
+| XmlSource columnar | 1.8M | 245.8 | 318 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 9.7M | 1298.9 | 397 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 7.3M | 978.2 | 204 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 88k | 11.9 | 35 | 1 | per-item dicts |
+| lxml iterparse | 526k | 70.7 | 22 | 1 | iterparse + clear() |
+| stdlib ET iterparse | 291k | 39.1 | 20 | 1 | iterparse + root.clear() |
+| xmltodict | 83k | 11.1 | 471 | 1 | whole-document dict |
+| simdxml (Python) | 608k | 81.7 | 1067 | 1 | per-item dicts, whole-doc parse |
+| simdxml parallel (Python) | 564k | 75.8 | 1061 | 16 | per-item dicts, parallel SIMD parse |
+| quick-xml 0.37.5 | 3.3M | 447.6 | 310 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 2.4M | 319.0 | 722 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.6M | 343.1 | 773 | 1 | parse+count only, no data |
 
 *Measured 2026-10-13 on a Ryzen 7 5800X, Python 3.14.8, xmlstreamer-ng 1.1.0,
 xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python)
@@ -230,13 +230,13 @@ in-memory bytes, best of N interleaved rounds:
 
 | feed | xmlstreamer-ng | xmlstreamer (original) | lxml iterparse (recover=True) | stdlib ET iterparse | xmltodict | simdxml (Rust engine) |
 |---|---|---|---|---|---|---|
-| flat items | 556k items/s | 94k | 342k | 266k | 92k | 669k |
-| CDATA-heavy | 375k items/s | 72k | 211k | 222k | 84k | 552k |
+| flat items | 528k items/s | 87k | 321k | 251k | 87k | 630k |
+| CDATA-heavy | 371k items/s | 68k | 201k | 202k | 79k | 514k |
 
 The simdxml rows parse the whole document in memory before extracting
 records, so they buy their speed with ~1 GB peak RSS on the 128 MiB feed
 (see the consolidated table) and no streaming contract. The fork is
-~5.9x (flat) to ~5.2x (CDATA) faster than the original package it
+~6.1x (flat) to ~5.5x (CDATA) faster than the original package it
 replaces, at the same recovery contract.
 
 **Columnar / parallel adapter, multiple threads.** Same 128 MiB file (953,250
@@ -245,16 +245,16 @@ parallel API, so it cannot appear in this table:
 
 | engine | throughput | items/s | peak RSS |
 |---|---|---|---|
-| XmlSource columnar | 251 MB/s | ~1.9M | 319 MB |
-| XmlSource parallel (8 threads) | 1270 MB/s | ~9.5M | 369 MB |
-| XmlSource bounded parallel streaming | 1076 MB/s | ~8.0M | 204 MB |
-| XmlSource projected (`schema=[...]`) | 122 MB/s | ~865k | 208 MB |
-| XmlSource projected, 8 threads | 725 MB/s | ~5.1M | 217 MB |
-| stdlib ET iterparse | 41 MB/s | ~302k | 20 MB |
-| lxml iterparse (recover=True) | 74 MB/s | ~550k | 22 MB |
+| XmlSource columnar | 243 MB/s | ~1.8M | 318 MB |
+| XmlSource parallel (8 threads) | 1311 MB/s | ~9.8M | 309 MB |
+| XmlSource bounded parallel streaming | 987 MB/s | ~7.3M | 204 MB |
+| XmlSource projected (`schema=[...]`) | 249 MB/s | ~1.9M | 218 MB |
+| XmlSource projected, 8 threads | 1303 MB/s | ~9.7M | 279 MB |
+| stdlib ET iterparse | 40 MB/s | ~297k | 18 MB |
+| lxml iterparse (recover=True) | 72 MB/s | ~536k | 21 MB |
 
 For bulk local ingestion the adapter is roughly 6x stdlib single-threaded and
-~30x in parallel; a projection that lets the scanner skip unwanted fields adds
+~33x in parallel; a projection that lets the scanner skip unwanted fields adds
 another ~10% on top of parallel in this run (on other feeds and CPUs the
 projection win is larger - it depends on how much of each item is skipped).
 Parallel and bounded modes are where the engine pays off; the per-item API is
@@ -266,13 +266,13 @@ table, best of 3, full numbers in
 
 | feed | path | rows/s | MB/s |
 |---|---|---|---|
-| plain 128 MiB | read_xml | 955k | 128 |
-| plain 128 MiB | read_xml_par (chunks=2) | 5,063k | 680 |
-| plain 128 MiB | iter_xml_batches_par (threads=8) | 3,985k | 535 |
-| cdata 50,000 | read_xml_par (chunks=4) | 2,068k | 976 |
+| plain 128 MiB | read_xml | 1,895k | 255 |
+| plain 128 MiB | read_xml_par (chunks=2) | 9,145k | 1229 |
+| plain 128 MiB | iter_xml_batches_par (threads=8) | 8,464k | 1137 |
+| cdata 50,000 | read_xml_par (chunks=4) | 2,704k | 1276 |
 
-Single-threaded paths sit at 0.9-1.0M rows/s on flat feeds; `read_xml_par`
-jumps ~4x at chunks=2 and saturates the 8-core CPU by chunks=2-8. Extra
+Single-threaded paths sit at 1.7-1.9M rows/s on flat feeds; `read_xml_par`
+jumps ~5x at chunks=2 and saturates the 8-core CPU by chunks=2-8. Extra
 threads past the physical core count add only noise.
 
 **Native references.** Raw parse throughput of the same feeds against
@@ -283,9 +283,9 @@ pugixml 1.15 (C++), built `-O3`/lto via
 
 | feed | engine | items/s | MB/s |
 |---|---|---|---|
-| plain 128 MiB | quick-xml | 3,482k | 468 |
-| plain 128 MiB | simdxml | 2,219k | 298 |
-| plain 128 MiB | pugixml | 2,576k | 346 |
+| plain 128 MiB | quick-xml | 3,443k | 463 |
+| plain 128 MiB | simdxml | 2,234k | 300 |
+| plain 128 MiB | pugixml | 2,498k | 336 |
 
 These binaries only parse and count elements: no encoding detection, no
 recovery contract, no Arrow materialization. They are an upper-bound
@@ -300,10 +300,10 @@ subprocess, and reports its peak RSS - measured by the kernel, not estimated.
 | parser | peak RSS |
 |---|---|
 | xmlstreamer-ng per-item | 75 MB |
-| xmlstreamer (original) per-item | 34 MB |
+| xmlstreamer (original) per-item | 33 MB |
 | XmlSource bounded streaming | 204 MB |
-| lxml iterparse | 21 MB |
-| stdlib ET iterparse | 18 MB |
+| lxml iterparse | 20 MB |
+| stdlib ET iterparse | 16 MB |
 | xmltodict (streaming mode) | 24 MB |
 | xmltodict (as commonly used) | 444 MB - grows with the feed |
 
