@@ -1,37 +1,40 @@
 # xmlstreamer benchmarks
 
-Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer_ng 1.1.0, lxml 6.1.3, xmltodict 1.0.4, chardet 7.6.0
+Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer_ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, chardet 7.6.0
 
 ## Speed (parse-only, same in-memory bytes, best of N)
 
 | feed | parser | items | seconds | items/s |
 |---|---|---|---|---|
-| plain | xmlstreamer | 100,000 | 0.293 | 341,469 |
-| plain | lxml iterparse (recover=True) | 100,000 | 0.316 | 316,885 |
-| plain | stdlib ElementTree iterparse | 100,000 | 0.397 | 251,891 |
-| plain | xmltodict | 100,000 | 1.141 | 87,664 |
-| plain | xmltodict (streaming mode) | 100,000 | 1.076 | 92,964 |
-| cdata | xmlstreamer | 50,000 | 0.180 | 277,948 |
-| cdata | lxml iterparse (recover=True) | 50,000 | 0.249 | 200,701 |
-| cdata | stdlib ElementTree iterparse | 50,000 | 0.231 | 216,207 |
-| cdata | xmltodict | 50,000 | 0.642 | 77,937 |
-| cdata | xmltodict (streaming mode) | 50,000 | 0.600 | 83,383 |
-| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 0.390 | 256,158 |
+| plain | xmlstreamer-ng | 100,000 | 0.317 | 315,410 |
+| plain | xmlstreamer (original) | 100,000 | 1.230 | 81,308 |
+| plain | lxml iterparse (recover=True) | 100,000 | 0.322 | 310,292 |
+| plain | stdlib ElementTree iterparse | 100,000 | 0.419 | 238,816 |
+| plain | xmltodict | 100,000 | 1.234 | 81,017 |
+| plain | xmltodict (streaming mode) | 100,000 | 1.191 | 83,998 |
+| cdata | xmlstreamer-ng | 50,000 | 0.203 | 246,843 |
+| cdata | xmlstreamer (original) | 50,000 | 0.802 | 62,347 |
+| cdata | lxml iterparse (recover=True) | 50,000 | 0.276 | 181,023 |
+| cdata | stdlib ElementTree iterparse | 50,000 | 0.252 | 198,112 |
+| cdata | xmltodict | 50,000 | 0.719 | 69,503 |
+| cdata | xmltodict (streaming mode) | 50,000 | 0.677 | 73,885 |
+| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 0.382 | 261,829 |
 
 ## Peak memory (one subprocess per parser, RSS)
 
 | parser | feed MB | peak RSS MB | items | seconds |
 |---|---|---|---|---|
 | (python + imports baseline) | 121 | 15 | 0 | 0.00 |
-| xmlstreamer | 121 | 88 | 900,000 | 3.96 |
-| lxml iterparse (recover=True) | 121 | 22 | 900,000 | 3.15 |
-| stdlib ElementTree iterparse | 121 | 16 | 900,000 | 3.91 |
-| xmltodict (streaming mode) | 121 | 24 | 900,000 | 11.00 |
-| xmltodict | 121 | 444 | 900,000 | 11.28 |
+| xmlstreamer-ng | 121 | 75 | 900,000 | 3.27 |
+| xmlstreamer (original) | 121 | 34 | 900,000 | 12.32 |
+| lxml iterparse (recover=True) | 121 | 20 | 900,000 | 3.08 |
+| stdlib ElementTree iterparse | 121 | 16 | 900,000 | 4.03 |
+| xmltodict (streaming mode) | 121 | 24 | 900,000 | 11.23 |
+| xmltodict | 121 | 444 | 900,000 | 11.72 |
 
 ## Dirty-feed gauntlet (what each parser does to broken input)
 
-| case | xmlstreamer | lxml (recover) | stdlib ET | xmltodict |
+| case | xmlstreamer_ng | lxml (recover) | stdlib ET | xmltodict |
 |---|---|---|---|---|
 | healthy feed | OK | OK | OK | OK |
 | malformed item between healthy ones | OK: drops broken loudly (warning logged) | FABRICATES: emits 3 where 2 are real | LOUD FAILURE: ParseError, feed lost (emitted 1 of 2 first) | LOUD FAILURE: ExpatError, feed lost (emitted 0 of 2 first) |
