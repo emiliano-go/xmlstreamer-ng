@@ -71,7 +71,7 @@ jobs:
       - name: Tag must match the built version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          if [ ! -f "dist/xmlstreamer-ng-${tag}.tar.gz" ]; then
+          if [ ! -f "dist/xmlstreamer_ng-${tag}.tar.gz" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match what was built:"
             ls -1 dist/
             exit 1
