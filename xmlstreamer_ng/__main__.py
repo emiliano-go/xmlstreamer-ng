@@ -1,6 +1,6 @@
 """Command line: stream an XML feed and print one JSON object per item.
 
-    uvx xmlstreamer <source> [--tag item] [--limit N]
+    uvx xmlstreamer-ng <source> [--tag item] [--limit N]
 
 The source is an http, https or ftp URL, a local file path, or - for
 stdin.
@@ -32,7 +32,7 @@ def nonnegative_int(value: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="xmlstreamer",
+        prog="xmlstreamer-ng",
         description="Stream an XML feed and print one JSON object per item.",
     )
     parser.add_argument(
@@ -75,7 +75,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="log progress and stats to stderr",
     )
     parser.add_argument(
-        "--version", action="version", version=f"xmlstreamer {__version__}"
+        "--version", action="version", version=f"xmlstreamer-ng {__version__}"
     )
     return parser
 
@@ -135,7 +135,7 @@ def main(argv: list[str] | None = None) -> int:
                     print(json.dumps(item, ensure_ascii=False))
     except FeedInterruptedError as exc:
         print(
-            f"xmlstreamer: feed interrupted after {exc.items_delivered} "
+            f"xmlstreamer-ng: feed interrupted after {exc.items_delivered} "
             f"items: {exc.__cause__}",
             file=sys.stderr,
         )
@@ -147,7 +147,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except Exception as exc:
         # Network and setup failures: a clean one-liner, no traceback.
-        print(f"xmlstreamer: {exc}", file=sys.stderr)
+        print(f"xmlstreamer-ng: {exc}", file=sys.stderr)
         return 1
     return 0
 

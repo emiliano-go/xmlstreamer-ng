@@ -16,7 +16,7 @@ from parsers import (
 )
 
 GAUNTLET_PARSERS = {
-    "xmlstreamer": consume_xmlstreamer,
+    "xmlstreamer_ng": consume_xmlstreamer,
     "lxml (recover)": consume_lxml,
     "stdlib ET": consume_stdlib,
     "xmltodict": consume_xmltodict,
@@ -120,7 +120,7 @@ def run_case(parser_name: str, consume, case: Case) -> str:
     """Run one parser over one case and return the verdict cell."""
     emitted: List[Any] = []
     counter = _WarningCounter()
-    xs_logger = logging.getLogger("xmlstreamer")
+    xs_logger = logging.getLogger("xmlstreamer_ng")
     xs_logger.addHandler(counter)
     error: Optional[BaseException] = None
     try:

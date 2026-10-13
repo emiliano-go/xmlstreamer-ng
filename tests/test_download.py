@@ -7,7 +7,7 @@ import requests
 
 from feedlib import build_feed
 
-from xmlstreamer import (
+from xmlstreamer_ng import (
     USER_AGENT,
     BasicAuth,
     Transport,

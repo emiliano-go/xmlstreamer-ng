@@ -7,7 +7,7 @@ import pytest
 
 from feedlib import build_feed
 
-from xmlstreamer.__main__ import main
+from xmlstreamer_ng.__main__ import main
 
 
 def out_lines(capsys):
@@ -50,7 +50,7 @@ def test_construction_errors_stay_one_liners(capsys):
     # the CLI's error contract, not escape as a traceback.
     assert main(["http://unused.invalid/feed", "--tag", "   "]) == 1
     captured = capsys.readouterr()
-    assert "xmlstreamer:" in captured.err
+    assert "xmlstreamer-ng:" in captured.err
     assert "Traceback" not in captured.err
 
 
@@ -77,7 +77,7 @@ def test_limit_consumes_exactly_n_items(monkeypatch, capsys):
             pass
 
     monkeypatch.setattr(
-        "xmlstreamer.__main__.StreamInterpreter", FakeInterpreter
+        "xmlstreamer_ng.__main__.StreamInterpreter", FakeInterpreter
     )
     assert main(["http://unused.invalid/feed", "--limit", "2"]) == 0
     items, _ = out_lines(capsys)
@@ -127,17 +127,17 @@ def test_errors_exit_nonzero_with_clean_message(capsys):
     assert rc == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert "xmlstreamer:" in captured.err
+    assert "xmlstreamer-ng:" in captured.err
     assert "Traceback" not in captured.err
 
 
 def test_version_flag(capsys):
-    import xmlstreamer
+    import xmlstreamer_ng
 
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
     assert excinfo.value.code == 0
-    assert xmlstreamer.__version__ in capsys.readouterr().out
+    assert xmlstreamer_ng.__version__ in capsys.readouterr().out
 
 
 class _FakeStdin:

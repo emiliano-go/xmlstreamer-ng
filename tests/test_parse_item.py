@@ -2,7 +2,7 @@ import logging
 
 import pytest
 
-from xmlstreamer import ParsedItem, parse_item, to_nested
+from xmlstreamer_ng import ParsedItem, parse_item, to_nested
 
 
 def test_flat_item():
@@ -76,7 +76,7 @@ def test_undefined_entity_returns_none():
 
 
 def test_discarded_item_logs_a_warning(caplog):
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         assert parse_item(b"<item><d>a&nbsp;b</d></item>") is None
     assert "Discarding unparseable item" in caplog.text
 
@@ -346,7 +346,7 @@ def test_to_nested_force_list_true_mixed_content():
 def test_natural_underscore_key_does_not_lose_the_sibling(caplog):
     # A field literally named "x_1" collides with the numbering rule
     # for a repeated <x>. Neither value may vanish in silence.
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         parsed = parse_item(
             b"<item><x>a</x><x_1>natural</x_1><x>repeat</x></item>"
         )
@@ -355,7 +355,7 @@ def test_natural_underscore_key_does_not_lose_the_sibling(caplog):
 
 
 def test_numbering_without_collisions_is_unchanged(caplog):
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         parsed = parse_item(b"<item><x>a</x><x>b</x><x>c</x></item>")
     assert parsed == {"x": "a", "x_1": "b", "x_2": "c"}
     assert caplog.text == ""

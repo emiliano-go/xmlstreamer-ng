@@ -21,7 +21,7 @@ def _chunks(source: BinaryIO, size: int = CHUNK_SIZE):
 def consume_xmlstreamer(source: BinaryIO, sink: SinkT) -> None:
     """Full local pipeline: encoding detection + tokenizer + per-item
     expat. Discarded (malformed) items reach the sink as None."""
-    from xmlstreamer import Tokenizer, decode_stream, resolve_sample_encoding
+    from xmlstreamer_ng import Tokenizer, decode_stream, resolve_sample_encoding
 
     sample = source.read(CHUNK_SIZE)
     encoding = resolve_sample_encoding(sample)
@@ -97,7 +97,7 @@ def consume_xmltodict_stream(source: BinaryIO, sink: SinkT) -> None:
 
 # Short keys double as CLI arguments for the memory workers.
 PARSERS = {
-    "xmlstreamer": consume_xmlstreamer,
+    "xmlstreamer_ng": consume_xmlstreamer,
     "lxml": consume_lxml,
     "stdlib": consume_stdlib,
     "xmltodict": consume_xmltodict,
@@ -105,7 +105,7 @@ PARSERS = {
 }
 
 LABELS = {
-    "xmlstreamer": "xmlstreamer",
+    "xmlstreamer_ng": "xmlstreamer_ng",
     "lxml": "lxml iterparse (recover=True)",
     "stdlib": "stdlib ElementTree iterparse",
     "xmltodict": "xmltodict",

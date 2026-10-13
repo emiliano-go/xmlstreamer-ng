@@ -11,8 +11,8 @@ import rypipe
 
 from feedlib import build_feed, chunked
 
-from xmlstreamer import Tokenizer, XmlSource, col
-from xmlstreamer import _xmlstreamer
+from xmlstreamer_ng import Tokenizer, XmlSource, col
+from xmlstreamer_ng import _xmlstreamer
 
 # (name, feed, separator_tag, expected) — expected mirrors legacy behaviour.
 CASES = [
@@ -565,7 +565,7 @@ def test_engine_and_separator_are_validated(tmp_path):
 
 
 def test_source_threads_reach_the_streaming_reader(tmp_path, monkeypatch):
-    import xmlstreamer.source as source_module
+    import xmlstreamer_ng.source as source_module
 
     feed = build_feed([{"n": str(i)} for i in range(500)])
     path = _write(tmp_path, feed)
@@ -593,13 +593,13 @@ def test_source_threads_reach_the_streaming_reader(tmp_path, monkeypatch):
 def test_rypipe_read_stream_par_and_batches(tmp_path):
     feed = build_feed([{"t": "a"}, {"t": "b"}])
     path = _write(tmp_path, feed)
-    assert rypipe.read_stream(path, format="xmlstreamer", memory="1MiB").to_pylist() == [
+    assert rypipe.read_stream(path, format="xmlstreamer_ng", memory="1MiB").to_pylist() == [
         {"t": "a"},
         {"t": "b"},
     ]
-    assert rypipe.read_par(path, format="xmlstreamer", chunks=2).num_rows == 2
+    assert rypipe.read_par(path, format="xmlstreamer_ng", chunks=2).num_rows == 2
     batches = list(
-        rypipe.read_batches(path, format="xmlstreamer", batch_size=1)
+        rypipe.read_batches(path, format="xmlstreamer_ng", batch_size=1)
     )
     assert [batch.num_rows for batch in batches] == [1, 1]
 

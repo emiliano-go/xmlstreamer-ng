@@ -2,7 +2,7 @@
 
 Follows the crxml formula: subclass `rypipe.Adapter`, implement `read`, and
 users get the `|` pipeline, caching, and every sink for free. The parse runs
-entirely in the Rust rypipe adapter (`xmlstreamer._xmlstreamer`).
+entirely in the Rust rypipe adapter (`xmlstreamer_ng._xmlstreamer`).
 """
 
 from __future__ import annotations

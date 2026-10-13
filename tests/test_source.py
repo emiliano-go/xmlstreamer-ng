@@ -8,7 +8,7 @@ import pytest
 
 from feedlib import build_feed
 
-from xmlstreamer import Raw, StreamInterpreter, Transport
+from xmlstreamer_ng import Raw, StreamInterpreter, Transport
 
 THREE = [{"t": "one"}, {"t": "two"}, {"t": "three"}]
 
@@ -206,7 +206,7 @@ def test_broken_item_in_source_feed_drops_loudly(
     # item drops with a warning, its neighbors are delivered.
     source = make_source(feed_file(tmp_path, BROKEN_MIDDLE))\
         if make_source is str else make_source(BROKEN_MIDDLE)
-    with caplog.at_level("WARNING", logger="xmlstreamer"):
+    with caplog.at_level("WARNING", logger="xmlstreamer_ng"):
         with make_interpreter(source) as interpreter:
             assert list(interpreter) == [{"t": "one"}, {"t": "three"}]
     assert "Discarding unparseable item" in caplog.text

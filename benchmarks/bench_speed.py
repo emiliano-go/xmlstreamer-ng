@@ -77,7 +77,7 @@ class _FeedHandler(BaseHTTPRequestHandler):
 def _end_to_end(data: bytes, n_items: int, rounds: int) -> Dict:
     """StreamInterpreter over HTTP loopback: the whole real pipeline.
     Informative row, not comparable with the parse-only numbers."""
-    from xmlstreamer import StreamInterpreter, Transport
+    from xmlstreamer_ng import StreamInterpreter, Transport
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), _FeedHandler)
     server.feed_body = data

@@ -201,7 +201,7 @@ def test_production_logging(http_server, caplog):
         b"</catalog>"
     )
     url = http_server.serve("/cb9.xml", feed)
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         namespace = run_recipe("production-logging", url)
     assert len(namespace["books"]) == 2
     assert "Discarding unparseable item" in caplog.text

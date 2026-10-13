@@ -7,7 +7,7 @@ from hypothesis import assume, given, settings, strategies as st
 
 from feedlib import chunked
 
-from xmlstreamer import Tokenizer, parse_item, to_nested
+from xmlstreamer_ng import Tokenizer, parse_item, to_nested
 
 # Field tags: valid XML names that can never nest the separator.
 TAGS = st.from_regex(r"[a-z][a-z0-9]{0,7}", fullmatch=True).filter(

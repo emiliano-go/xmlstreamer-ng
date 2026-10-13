@@ -9,7 +9,7 @@ from feedlib import chunked
 
 import chardet
 
-from xmlstreamer import (
+from xmlstreamer_ng import (
     ApiKeyAuth,
     BasicAuth,
     BearerAuth,
@@ -122,7 +122,7 @@ def test_stream_gzip_decompress_three_members_in_one_chunk():
 
 def test_stream_gzip_decompress_trailing_garbage_tolerated(caplog):
     data = gzip.compress(SAMPLE_XML) + b"NOT-GZIP-JUNK"
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         result = b"".join(stream_gzip_decompress(chunked(data, 64)))
     assert result == SAMPLE_XML
     # Leftovers after a complete member are expected, not damage.
@@ -135,7 +135,7 @@ def test_stream_gzip_decompress_corrupt_member_warns(caplog):
     blob = bytearray(gzip.compress(SAMPLE_XML * 20))
     for offset in range(len(blob) // 2, len(blob) // 2 + 8):
         blob[offset] ^= 0xFF
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         b"".join(stream_gzip_decompress(chunked(bytes(blob), 64)))
     assert "corrupt" in caplog.text
 
@@ -148,7 +148,7 @@ def test_stream_gzip_decompress_corrupt_header_warns(caplog, chunk_size):
     broken = bytearray(gzip.compress(SAMPLE_XML))
     for offset in range(2, 10):
         broken[offset] ^= 0xFF
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         result = b"".join(
             stream_gzip_decompress(chunked(good + bytes(broken), chunk_size))
         )
@@ -163,7 +163,7 @@ def test_stream_gzip_decompress_corrupt_after_complete_member_warns(caplog):
     broken = bytearray(gzip.compress(SAMPLE_XML * 20))
     for offset in range(len(broken) // 2, len(broken) // 2 + 8):
         broken[offset] ^= 0xFF
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         result = b"".join(
             stream_gzip_decompress(chunked(good + bytes(broken), 64))
         )
@@ -173,7 +173,7 @@ def test_stream_gzip_decompress_corrupt_after_complete_member_warns(caplog):
 
 def test_stream_gzip_decompress_truncated_stream_warns(caplog):
     truncated = gzip.compress(SAMPLE_XML)[:-5]
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         result = b"".join(stream_gzip_decompress(chunked(truncated, 64)))
     assert result  # partial data still comes out
     assert "truncated" in caplog.text
@@ -181,7 +181,7 @@ def test_stream_gzip_decompress_truncated_stream_warns(caplog):
 
 def test_stream_gzip_decompress_complete_stream_does_not_warn(caplog):
     data = gzip.compress(SAMPLE_XML)
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         b"".join(stream_gzip_decompress(chunked(data, 64)))
     assert "truncated" not in caplog.text
 

@@ -29,7 +29,7 @@ def test_gauntlet_xmlstreamer_column_is_all_green():
     # Every verdict cell for xmlstreamer must be OK (possibly with a
     # loud drop) or the documented out-of-contract rejection.
     for case in CASES:
-        verdict = run_case("xmlstreamer", consume_xmlstreamer, case)
+        verdict = run_case("xmlstreamer_ng", consume_xmlstreamer, case)
         if case.expected is None:
             assert verdict == "unsupported (documented contract)", (
                 case.name, verdict

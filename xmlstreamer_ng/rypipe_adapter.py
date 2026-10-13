@@ -1,6 +1,6 @@
-"""Registration of xmlstreamer as a `rypipe` adapter.
+"""Registration of xmlstreamer_ng as a `rypipe` adapter.
 
-Importing this module (which `xmlstreamer/__init__.py` does) makes
+Importing this module (which `xmlstreamer_ng/__init__.py` does) makes
 ``rypipe.read("feed.xml", separator_tag="item")`` work.
 """
 
@@ -79,7 +79,7 @@ def _register() -> None:
         import rypipe
     except Exception:  # pragma: no cover - rypipe is a hard dependency
         return
-    rypipe.register_adapter("xmlstreamer", XmlAdapter(), extensions=[".xml"])
+    rypipe.register_adapter("xmlstreamer_ng", XmlAdapter(), extensions=[".xml"])
 
 
 _register()

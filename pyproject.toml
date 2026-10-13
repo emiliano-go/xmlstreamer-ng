@@ -34,7 +34,7 @@ dependencies = [
 ]
 
 [project.scripts]
-xmlstreamer = "xmlstreamer.__main__:main"
+xmlstreamer-ng = "xmlstreamer_ng.__main__:main"
 
 [project.urls]
 Homepage = "https://github.com/emiliano-go/xmlstreamer-ng"
@@ -56,14 +56,14 @@ dev = [
 [tool.uv]
 cache-keys = [
   { file = "pyproject.toml" },
-  { file = "xmlstreamer/__init__.py" },
+  { file = "xmlstreamer_ng/__init__.py" },
   { file = "native/Cargo.toml" },
   { file = "native/src/**/*.rs" },
 ]
 
 [tool.maturin]
 manifest-path = "native/Cargo.toml"
-module-name = "xmlstreamer._xmlstreamer"
+module-name = "xmlstreamer_ng._xmlstreamer"
 python-source = "."
 features = ["pyo3/extension-module"]
 # Keep the banner asset in the sdist so the README image renders on PyPI.

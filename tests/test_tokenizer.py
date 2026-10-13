@@ -5,7 +5,7 @@ import pytest
 
 from feedlib import build_feed, chunked, drain
 
-from xmlstreamer import Sections, Tokenizer, attvalue_is_well_formed
+from xmlstreamer_ng import Sections, Tokenizer, attvalue_is_well_formed
 
 
 def make_tokenizer(
@@ -326,7 +326,7 @@ def test_unterminated_processing_instruction_is_read_as_text(caplog):
         b"<?php never closed" + b"x" * 4096 +
         b"<item><t>two</t></item></feed>"
     )
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data, sections=Sections(max_size=512)))
     assert titles(items) == ["one", "two"]
     assert "nterminated" in caplog.text
@@ -355,7 +355,7 @@ def test_unterminated_comment_is_bounded_and_loud(caplog):
         b"<!-- never closed" + b"x" * 4096 +
         b"<item><t>two</t></item></feed>"
     )
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data, sections=Sections(max_size=512)))
     assert titles(items) == ["one", "two"]
     assert "nterminated" in caplog.text
@@ -540,7 +540,7 @@ def test_doctype_nested_brackets():
 def test_unterminated_section_read_as_text_by_default(caplog):
     ghost = b"<?target " + b"y" * 300 + b" <item><t>inside</t></item>"
     data = b"<feed><item><t>real</t></item>" + ghost + b"</feed>"
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(
             make_tokenizer(data, sections=Sections(max_size=128))
         )
@@ -553,7 +553,7 @@ def test_unterminated_section_read_as_text_by_default(caplog):
 def test_unterminated_section_kept_as_markup_when_asked(caplog):
     ghost = b"<?target " + b"y" * 300 + b" <item><t>inside</t></item>"
     data = b"<feed><item><t>real</t></item>" + ghost + b"</feed>"
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(
             make_tokenizer(
                 data,
@@ -592,7 +592,7 @@ def test_limit_decision_does_not_depend_on_chunking(chunk_size):
 
 def test_section_limit_at_eof_warns(caplog):
     data = b"<feed><item><t>real</t></item><!-- sin cerrar"
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["real"]
     assert "ended inside" in caplog.text
@@ -723,7 +723,7 @@ def test_huge_doctype_is_linear_with_small_chunks():
 def test_malformed_separator_tag_is_reported(data, caplog):
     # The content is intact, so the item is still delivered; what the
     # feed got wrong is said out loud instead of passing unnoticed.
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert "separator tag" in caplog.text
@@ -734,7 +734,7 @@ def test_well_formed_separator_tags_stay_quiet(caplog):
         b'<feed><item id="7" kind=\'entry\' data-x="a>b" /><item id="8">'
         b"<t>x</t></item></feed>"
     )
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert caplog.text == ""
@@ -754,7 +754,7 @@ def test_well_formed_separator_tags_stay_quiet(caplog):
     ],
 )
 def test_delimiter_validation_covers_xml_syntax(data, caplog):
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert "separator tag" in caplog.text
@@ -773,7 +773,7 @@ def test_delimiter_validation_covers_xml_syntax(data, caplog):
     ],
 )
 def test_valid_delimiters_stay_quiet(data, caplog):
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert caplog.text == ""
@@ -807,7 +807,7 @@ def test_tokenizer_rejects_a_non_numeric_deadline():
     ],
 )
 def test_delimiter_names_and_values_follow_xml(data, caplog):
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert "separator tag" in caplog.text
@@ -824,7 +824,7 @@ def test_delimiter_names_and_values_follow_xml(data, caplog):
     ],
 )
 def test_valid_names_and_entity_references_stay_quiet(data, caplog):
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert caplog.text == ""
@@ -843,7 +843,7 @@ def test_valid_names_and_entity_references_stay_quiet(data, caplog):
 )
 def test_attribute_values_must_hold_xml_chars(value, caplog):
     data = b'<feed><item a="' + value + b'"><t>x</t></item></feed>'
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert "separator tag" in caplog.text
@@ -862,7 +862,7 @@ def test_numeric_references_are_ascii_digits_in_range(value, caplog):
     # A reference XML cannot spell is malformed markup: never an
     # exception out of the scan, and never a silent pass either.
     data = b'<feed><item a="' + value + b'"><t>x</t></item></feed>'
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert "separator tag" in caplog.text
@@ -881,7 +881,7 @@ def test_long_numeric_references_still_read_their_value():
 )
 def test_valid_chars_and_references_stay_quiet(value, caplog):
     data = b'<feed><item a="' + value + b'"><t>x</t></item></feed>'
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = drain(make_tokenizer(data))
     assert titles(items) == ["x"]
     assert caplog.text == ""

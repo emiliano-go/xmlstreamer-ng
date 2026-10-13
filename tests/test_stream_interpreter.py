@@ -8,8 +8,8 @@ import pytest
 
 from feedlib import build_feed
 
-import xmlstreamer
-from xmlstreamer import (
+import xmlstreamer_ng
+from xmlstreamer_ng import (
     ApiKeyAuth,
     BasicAuth,
     BearerAuth,
@@ -242,7 +242,7 @@ def test_closing_log_reports_the_funnel(http_server, caplog):
             {"t": "c", "status": "new"},
         ]),
     )
-    with caplog.at_level(logging.INFO, logger="xmlstreamer"):
+    with caplog.at_level(logging.INFO, logger="xmlstreamer_ng"):
         items = list(
             make_interpreter(url, item_filter=lambda i: i["status"] != "old")
         )
@@ -368,7 +368,7 @@ def test_budget_ignores_wall_clock_jumps(http_server, monkeypatch):
         def now():
             return datetime.now() + timedelta(hours=2)
 
-    monkeypatch.setattr(xmlstreamer, "datetime", JumpedClock)
+    monkeypatch.setattr(xmlstreamer_ng, "datetime", JumpedClock)
     assert run.check_terminate() is False
 
 
@@ -698,7 +698,7 @@ def test_closing_a_run_reports_its_funnel_once(http_server, caplog):
     interpreter = Alerting(url=url, separator_tag="item", buffer_size=2048)
     run = iter(interpreter)
     next(run)
-    with caplog.at_level(logging.INFO, logger="xmlstreamer"):
+    with caplog.at_level(logging.INFO, logger="xmlstreamer_ng"):
         run.close()
         run.close()
         interpreter.close()
@@ -746,7 +746,7 @@ def test_invalid_utf8_warns_once_with_a_count(http_server, caplog):
         + b"</feed>"
     )
     url = http_server.serve("/late.xml", body)
-    with caplog.at_level(logging.INFO, logger="xmlstreamer"):
+    with caplog.at_level(logging.INFO, logger="xmlstreamer_ng"):
         items = list(make_interpreter(url))
     assert len(items) == 5
     # One warning for the run, and the total in the closing stats line.
@@ -757,7 +757,7 @@ def test_invalid_utf8_warns_once_with_a_count(http_server, caplog):
 def test_feed_ending_inside_an_item_warns(http_server, caplog):
     body = b"<feed><item><t>one</t></item><item><t>trunc"
     url = http_server.serve("/cut.xml", body)
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         items = list(make_interpreter(url))
     assert [item["t"] for item in items] == ["one"]
     assert "ended inside an item" in caplog.text
@@ -765,7 +765,7 @@ def test_feed_ending_inside_an_item_warns(http_server, caplog):
 
 def test_complete_feed_does_not_warn_about_truncation(http_server, caplog):
     url = http_server.serve("/ok.xml", build_feed([{"t": "one"}]))
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         list(make_interpreter(url))
     assert "ended inside an item" not in caplog.text
 
@@ -871,7 +871,7 @@ def test_time_budget_bounds_a_slow_source(http_server, caplog):
         transport=Transport(download_mode="stream"),
     )
     start = time.monotonic()
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         assert list(interpreter) == []
     assert time.monotonic() - start < 2.0
     assert "exceeded" in caplog.text.lower()
@@ -906,7 +906,7 @@ def test_malformed_delimiters_reach_the_closing_stats(http_server, caplog):
         b"</feed>"
     )
     url = http_server.serve("/delims.xml", body)
-    with caplog.at_level(logging.INFO, logger="xmlstreamer"):
+    with caplog.at_level(logging.INFO, logger="xmlstreamer_ng"):
         items = list(make_interpreter(url))
     assert len(items) == 2
     assert "malformed=2" in caplog.text
@@ -920,7 +920,7 @@ def test_time_budget_covers_the_download(http_server, caplog):
     )
     interpreter = make_interpreter(url, max_running_time=0.01)
     start = time.monotonic()
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         assert list(interpreter) == []
     assert time.monotonic() - start < 2.0
     assert "exceeded" in caplog.text.lower()
@@ -980,7 +980,7 @@ def test_time_budget_covers_the_stream_head(caplog):
             transport=Transport(download_mode="stream"),
         )
         start = time.monotonic()
-        with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+        with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
             assert list(interpreter) == []
         elapsed = time.monotonic() - start
     finally:
@@ -1177,7 +1177,7 @@ def test_a_log_handler_that_closes_the_run_keeps_the_funnel_true(
         f"/handlerclose{build_feed_bytes.__name__}.xml", build_feed_bytes()
     )
     handler = ClosingHandler()
-    logger = logging.getLogger("xmlstreamer")
+    logger = logging.getLogger("xmlstreamer_ng")
     logger.addHandler(handler)
     try:
         interpreter = Alerting(
@@ -1213,7 +1213,7 @@ def test_a_hook_cannot_open_a_run_while_the_interpreter_closes(
     runs = [iter(interpreter), iter(interpreter)]
     for run in runs:
         next(run)
-    with caplog.at_level(logging.ERROR, logger="xmlstreamer"):
+    with caplog.at_level(logging.ERROR, logger="xmlstreamer_ng"):
         interpreter.close()
     assert len(interpreter._open_runs) == 0
     assert all(
@@ -1281,7 +1281,7 @@ def test_a_reentrant_close_cannot_disguise_a_release_failure(
     for number, run in enumerate(runs):
         next(run)
         run.tokenizer.feed_generator = FailingSource(str(number))
-    with caplog.at_level(logging.ERROR, logger="xmlstreamer"):
+    with caplog.at_level(logging.ERROR, logger="xmlstreamer_ng"):
         with pytest.raises(OSError, match="cannot release"):
             interpreter.close()
     assert sorted(attempts) == ["0", "1", "2"]
@@ -1325,7 +1325,7 @@ def test_a_broken_hook_does_not_break_the_run(http_server, caplog):
     # The hook reports: a report that fails is logged with its
     # traceback and goes no further, so work already delivered stands.
     url = http_server.serve("/brokenhook.xml", build_feed([{"t": "a"}]))
-    with caplog.at_level(logging.ERROR, logger="xmlstreamer"):
+    with caplog.at_level(logging.ERROR, logger="xmlstreamer_ng"):
         items = list(_BrokenHook(url=url, separator_tag="item"))
     assert [item["t"] for item in items] == ["a"]
     assert "run_finished" in caplog.text
@@ -1458,7 +1458,7 @@ def test_a_cancellation_while_reporting_still_releases_everything(
         http_server, "/cancelreport.xml", [OSError("cannot release")] * 3
     )
     handler = InterruptingHandler()
-    logger = logging.getLogger("xmlstreamer")
+    logger = logging.getLogger("xmlstreamer_ng")
     previous = logger.level
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
@@ -1493,7 +1493,7 @@ def test_no_run_can_be_opened_while_the_teardown_reports(http_server):
         http_server, "/reportopen.xml", [OSError("cannot release")] * 3
     )
     handler = OpeningHandler()
-    logger = logging.getLogger("xmlstreamer")
+    logger = logging.getLogger("xmlstreamer_ng")
     previous = logger.level
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
@@ -1531,7 +1531,7 @@ def test_the_first_cancellation_survives_a_reporter_that_cancels_too(
         http_server, "/reportcancel.xml", errors
     )
     handler = CancellingHandler()
-    logger = logging.getLogger("xmlstreamer")
+    logger = logging.getLogger("xmlstreamer_ng")
     previous = logger.level
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
@@ -1558,7 +1558,7 @@ def test_a_release_failure_is_reported_even_under_a_cancellation(
     interpreter, runs, attempts = _runs_with_sources(
         http_server, "/reportunder.xml", errors
     )
-    with caplog.at_level(logging.WARNING, logger="xmlstreamer"):
+    with caplog.at_level(logging.WARNING, logger="xmlstreamer_ng"):
         with pytest.raises(KeyboardInterrupt):
             interpreter.close()
     assert caplog.text.count("Releasing a run failed") == 2

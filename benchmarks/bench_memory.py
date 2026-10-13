@@ -58,7 +58,7 @@ def run_memory(quick: bool = False) -> List[Dict]:
     with tempfile.NamedTemporaryFile(suffix=".xml") as feed_file:
         feed_bytes = write_plain_feed(feed_file, n_items)
         parser_keys = [
-            "baseline", "xmlstreamer", "lxml", "stdlib",
+            "baseline", "xmlstreamer_ng", "lxml", "stdlib",
             "xmltodict-stream", "xmltodict",
         ]
         for parser_key in parser_keys:

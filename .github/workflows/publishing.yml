@@ -2,7 +2,7 @@ name: Release
 
 # Releases are cut by pushing a tag, not from the Actions UI:
 #     git tag vX.Y.Z && git push origin vX.Y.Z
-# X.Y.Z is xmlstreamer.__version__ - the sdist built below refuses a tag
+# X.Y.Z is xmlstreamer_ng.__version__ - the sdist built below refuses a tag
 # that disagrees with what it built.
 
 on:
@@ -66,12 +66,12 @@ jobs:
         run: uv build --sdist
 
       # The tag is what users will install; if it disagrees with
-      # xmlstreamer.__version__, the wrong version ships under the
+      # xmlstreamer_ng.__version__, the wrong version ships under the
       # right name.
       - name: Tag must match the built version
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          if [ ! -f "dist/xmlstreamer_ng-${tag}.tar.gz" ]; then
+          if [ ! -f "dist/xmlstreamer-ng-${tag}.tar.gz" ]; then
             echo "tag ${GITHUB_REF_NAME} does not match what was built:"
             ls -1 dist/
             exit 1
@@ -83,7 +83,7 @@ jobs:
         run: >
           cd "$(mktemp -d)" && uv run --isolated --no-project
           --with "$GITHUB_WORKSPACE"/dist/*.tar.gz
-          python -c "import xmlstreamer; print(xmlstreamer.__version__)"
+          python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
       - name: Upload sdist
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

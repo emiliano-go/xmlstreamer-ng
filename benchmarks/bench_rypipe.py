@@ -55,14 +55,14 @@ def _legacy(path: str, data: bytes) -> int:
 
 
 def _columnar(path: str) -> int:
-    from xmlstreamer import _xmlstreamer
+    from xmlstreamer_ng import _xmlstreamer
 
     return _xmlstreamer.read_xml(path, separator_tag="item", use_mmap=True).num_rows
 
 
 def _parallel(chunks: int) -> Callable[[str], int]:
     def run(path: str) -> int:
-        from xmlstreamer import _xmlstreamer
+        from xmlstreamer_ng import _xmlstreamer
 
         return _xmlstreamer.read_xml_par(
             path, separator_tag="item", chunks=chunks, use_mmap=True
@@ -73,7 +73,7 @@ def _parallel(chunks: int) -> Callable[[str], int]:
 
 def _stream(memory: str) -> Callable[[str], int]:
     def run(path: str) -> int:
-        from xmlstreamer import _xmlstreamer
+        from xmlstreamer_ng import _xmlstreamer
 
         return sum(
             b.num_rows
@@ -87,7 +87,7 @@ def _stream(memory: str) -> Callable[[str], int]:
 
 def _par_stream(threads: int, memory: str = "64MiB") -> Callable[[str], int]:
     def run(path: str) -> int:
-        from xmlstreamer import _xmlstreamer
+        from xmlstreamer_ng import _xmlstreamer
 
         return sum(
             b.num_rows
@@ -104,7 +104,7 @@ def _par_stream(threads: int, memory: str = "64MiB") -> Callable[[str], int]:
 
 
 def _projection(path: str) -> int:
-    from xmlstreamer import _xmlstreamer
+    from xmlstreamer_ng import _xmlstreamer
 
     return _xmlstreamer.read_xml(
         path,
@@ -147,7 +147,7 @@ def _lxml(path: str) -> int:
 
 
 def _columnar_proj(path: str) -> int:
-    from xmlstreamer import _xmlstreamer
+    from xmlstreamer_ng import _xmlstreamer
 
     return _xmlstreamer.read_xml(
         path,
@@ -159,7 +159,7 @@ def _columnar_proj(path: str) -> int:
 
 def _par_proj(chunks: int) -> Callable[[str], int]:
     def run(path: str) -> int:
-        from xmlstreamer import _xmlstreamer
+        from xmlstreamer_ng import _xmlstreamer
 
         return _xmlstreamer.read_xml_par(
             path,

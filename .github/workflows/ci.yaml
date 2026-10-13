@@ -52,7 +52,7 @@ jobs:
           enable-cache: true
 
       - name: Ruff (unused imports and variables)
-        run: uvx ruff check --select F401,F811,F841 xmlstreamer/ tests/
+        run: uvx ruff check --select F401,F811,F841 xmlstreamer_ng/ tests/
 
   build:
     runs-on: ubuntu-latest
@@ -79,12 +79,12 @@ jobs:
       - name: Smoke test the wheel
         run: >
           uv run --isolated --no-project --with dist/*.whl
-          python -c "import xmlstreamer; print(xmlstreamer.__version__)"
+          python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
       - name: Smoke test the source distribution
         run: >
           uv run --isolated --no-project --with dist/*.tar.gz
-          python -c "import xmlstreamer; print(xmlstreamer.__version__)"
+          python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
   wheels:
     # abi3-py310: one wheel per platform covers Python 3.10+.
@@ -118,7 +118,7 @@ jobs:
         shell: bash
         run: >
           uv run --isolated --no-project --with dist/*.whl
-          python -c "import xmlstreamer; print(xmlstreamer.__version__)"
+          python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
