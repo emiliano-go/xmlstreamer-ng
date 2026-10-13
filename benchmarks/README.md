@@ -9,6 +9,10 @@ runs with a single command:
 uv run --group bench python benchmarks/run_all.py
 ```
 
+For one consolidated table with every engine (Python and native) on the
+same 128 MiB feed, run `bench_all.py`; its output feeds the README
+Performance section and [../docs/benchmarks/all.md](../docs/benchmarks/all.md).
+
 `--quick` runs the same harness on tiny datasets (a smoke test for
 automation; its numbers mean nothing). All feeds are synthetic and deterministic (`feeds.py`):
 same call, same bytes, no randomness, no real-world data.
@@ -72,6 +76,37 @@ exist and skips it with a note otherwise.
 ## Results
 
 Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer_ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, chardet 7.6.0
+
+### All engines, one feed (consolidated)
+
+Best of 3 rounds, `bench_all.py`; same table in the README Performance
+section and in [../docs/benchmarks/all.md](../docs/benchmarks/all.md).
+Every engine reads the same 128 MiB plain feed (953,250 items). Peak RSS
+for the Python engines is measured in a fresh subprocess; for the native
+counters it comes from the process rusage.
+
+Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer-ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, pyarrow 26.0.0; quick-xml 0.37.5, simdxml 0.2.1 (git), pugixml 1.15
+
+| engine | items/s | MB/s | peak RSS MB | threads | API/notes |
+|---|---|---|---|---|---|
+| xmlstreamer-ng per-item | 276k | 37.0 | 76 | 1 | per-item dicts |
+| XmlSource columnar | 1.1M | 145.8 | 319 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 5.7M | 770.9 | 274 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 4.7M | 631.4 | 205 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 85k | 11.4 | 35 | 1 | per-item dicts |
+| lxml iterparse | 504k | 67.7 | 22 | 1 | iterparse + clear() |
+| stdlib ET iterparse | 279k | 37.5 | 20 | 1 | iterparse + root.clear() |
+| xmltodict | 87k | 11.7 | 471 | 1 | whole-document dict |
+| quick-xml 0.37.5 | 3.3M | 444.6 | 246 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.6M | 220.3 | 721 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.2M | 297.6 | 773 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.6M | 210.2 | 721 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.1M | 278.6 | 774 | 1 | parse+count only, no data |
+
+Native rows are speed-only references (parse and count, no encoding
+detection, recovery contract, or data materialization); their RSS
+reflects a parse-only workload that keeps no records. If the native
+binaries are not built, `bench_all.py` omits those rows and says so.
 
 ### Rypipe adapter scaling
 

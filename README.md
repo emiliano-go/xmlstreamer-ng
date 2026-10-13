@@ -174,6 +174,7 @@ reproducible harness in [`benchmarks/`](benchmarks/README.md); one command
 re-measures it on your machine:
 
 ```bash
+uv run --group bench python benchmarks/bench_all.py    # one table, every engine
 uv run --group bench python benchmarks/run_all.py
 uv run --group bench python benchmarks/bench_rypipe.py --feed-mb 100
 uv run --group bench python benchmarks/bench_scaling.py
@@ -184,6 +185,35 @@ benchmarks/native/build_native.sh
 *Measured 2026-10-12 on a Ryzen 7 5800X, Python 3.14.8, xmlstreamer-ng 1.1.0,
 xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4.
 Absolute numbers track the machine; the ratios are stable across runs.*
+
+**All engines, one feed (consolidated).** Every engine below reads the same
+synthetic plain feed: 128 MiB, 953,250 items. Best of 3 rounds; peak RSS for
+the Python engines is measured in a fresh subprocess, for the native counters
+from the process rusage. Regenerate this table with
+`python benchmarks/bench_all.py` (it skips the native rows with a note when
+the binaries are not built):
+
+| engine | items/s | MB/s | peak RSS MB | threads | API/notes |
+|---|---|---|---|---|---|
+| xmlstreamer-ng per-item | 276k | 37.0 | 76 | 1 | per-item dicts |
+| XmlSource columnar | 1.1M | 145.8 | 319 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 5.7M | 770.9 | 274 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 4.7M | 631.4 | 205 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 85k | 11.4 | 35 | 1 | per-item dicts |
+| lxml iterparse | 504k | 67.7 | 22 | 1 | iterparse + clear() |
+| stdlib ET iterparse | 279k | 37.5 | 20 | 1 | iterparse + root.clear() |
+| xmltodict | 87k | 11.7 | 471 | 1 | whole-document dict |
+| quick-xml 0.37.5 | 3.3M | 444.6 | 246 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.6M | 220.3 | 721 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.2M | 297.6 | 773 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.6M | 210.2 | 721 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.1M | 278.6 | 774 | 1 | parse+count only, no data |
+
+*Measured 2026-10-13 on a Ryzen 7 5800X, Python 3.14.8, xmlstreamer-ng 1.1.0,
+xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, pyarrow 26.0.0;
+native rows are speed-only references (parse and count, no encoding
+detection, recovery contract, or data materialization), and their RSS reflects
+a parse-only workload that keeps no records.*
 
 The engine is Rust. The per-item streaming API (`StreamInterpreter`) keeps the
 recovery semantics; the adapter API (`XmlSource`) adds Arrow, projection and
