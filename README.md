@@ -178,8 +178,8 @@ parallelism. This fork replaces the original pure-Python xmlstreamer, whose
 per-item API ran at ~81k items/s on the flat feed; xmlstreamer-ng is now
 on par with or faster than both the stdlib and lxml.
 
-**Speed (per-item API).** Parse-only throughput over the same in-memory bytes,
-best of N interleaved rounds:
+**Speed (per-item API), single thread.** Parse-only throughput over the same
+in-memory bytes, best of N interleaved rounds:
 
 | feed | xmlstreamer-ng | xmlstreamer (original) | lxml iterparse (recover=True) | stdlib ET iterparse | xmltodict |
 |---|---|---|---|---|---|
@@ -189,17 +189,19 @@ best of N interleaved rounds:
 The fork is ~3.9x (flat) to ~4.0x (CDATA) faster than the original package it
 replaces, at the same recovery contract.
 
-**Columnar / parallel adapter.** Same 128 MiB file, every parser reading it:
+**Columnar / parallel adapter, multiple threads.** Same 128 MiB file (953,250
+items), every parser reading it. The original xmlstreamer has no columnar or
+parallel API, so it cannot appear in this table:
 
-| engine | throughput | peak RSS |
-|---|---|---|
-| XmlSource columnar | 113 MB/s | 303 MB |
-| XmlSource parallel (8 threads) | 661 MB/s | 273 MB |
-| XmlSource bounded parallel streaming | 493 MB/s | 193 MB |
-| XmlSource projected (`schema=[...]`) | 122 MB/s | 208 MB |
-| XmlSource projected, 8 threads | 725 MB/s | 217 MB |
-| stdlib ET iterparse | 33 MB/s | 18 MB |
-| lxml iterparse (recover=True) | 56 MB/s | 21 MB |
+| engine | throughput | items/s | peak RSS |
+|---|---|---|---|
+| XmlSource columnar | 113 MB/s | ~800k | 303 MB |
+| XmlSource parallel (8 threads) | 661 MB/s | ~4.7M | 273 MB |
+| XmlSource bounded parallel streaming | 493 MB/s | ~3.5M | 193 MB |
+| XmlSource projected (`schema=[...]`) | 122 MB/s | ~865k | 208 MB |
+| XmlSource projected, 8 threads | 725 MB/s | ~5.1M | 217 MB |
+| stdlib ET iterparse | 33 MB/s | ~234k | 18 MB |
+| lxml iterparse (recover=True) | 56 MB/s | ~397k | 21 MB |
 
 For bulk local ingestion the adapter is roughly 3.4x stdlib single-threaded and
 ~20x in parallel; a projection that lets the scanner skip unwanted fields adds
