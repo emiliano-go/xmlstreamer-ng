@@ -8,15 +8,15 @@ feeds the Python harness uses, best of 3 rounds inside each binary
 
 | feed | parser | items | seconds | items/s | MB/s |
 |---|---|---|---|---|---|
-| plain 100,000 | quick-xml | 100,000 | 0.030 | 3,383,179 | 451.3 |
-| plain 100,000 | simdxml | 100,000 | 0.042 | 2,355,269 | 314.2 |
-| plain 100,000 | pugixml | 100,000 | 0.039 | 2,576,456 | 343.7 |
-| cdata 50,000 | quick-xml | 50,000 | 0.022 | 2,293,157 | 1,082.0 |
-| cdata 50,000 | simdxml | 50,000 | 0.029 | 1,713,620 | 808.6 |
-| cdata 50,000 | pugixml | 50,000 | 0.023 | 2,210,042 | 1,042.8 |
-| plain 128 MiB | quick-xml | 953,250 | 0.284 | 3,356,278 | 450.9 |
-| plain 128 MiB | simdxml | 953,250 | 0.513 | 1,859,688 | 249.9 |
-| plain 128 MiB | pugixml | 953,250 | 0.393 | 2,423,963 | 325.7 |
+| plain 100,000 | quick-xml | 100,000 | 0.029 | 3,434,420 | 458.2 |
+| plain 100,000 | simdxml | 100,000 | 0.044 | 2,281,334 | 304.3 |
+| plain 100,000 | pugixml | 100,000 | 0.038 | 2,601,118 | 347.0 |
+| cdata 50,000 | quick-xml | 50,000 | 0.022 | 2,226,874 | 1,050.8 |
+| cdata 50,000 | simdxml | 50,000 | 0.029 | 1,726,221 | 814.5 |
+| cdata 50,000 | pugixml | 50,000 | 0.024 | 2,127,207 | 1,003.7 |
+| plain 128 MiB | quick-xml | 953,250 | 0.274 | 3,481,581 | 467.8 |
+| plain 128 MiB | simdxml | 953,250 | 0.430 | 2,219,436 | 298.2 |
+| plain 128 MiB | pugixml | 953,250 | 0.370 | 2,575,955 | 346.1 |
 
 What these are, and what they are not:
 

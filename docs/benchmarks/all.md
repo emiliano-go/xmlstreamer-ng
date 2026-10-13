@@ -21,19 +21,19 @@ Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xml
 
 | engine | items/s | MB/s | peak RSS MB | threads | API/notes |
 |---|---|---|---|---|---|
-| xmlstreamer-ng per-item | 273k | 36.7 | 76 | 1 | per-item dicts |
-| XmlSource columnar | 1.2M | 156.3 | 301 | 1 | Arrow batches |
-| XmlSource parallel (8 threads) | 6.2M | 835.5 | 275 | 8 | Arrow batches, 8 threads |
-| XmlSource bounded parallel streaming | 5.2M | 703.3 | 197 | 8 | bounded batches, 8 threads |
-| xmlstreamer (original) | 88k | 11.9 | 35 | 1 | per-item dicts |
-| lxml iterparse | 528k | 70.9 | 22 | 1 | iterparse + clear() |
-| stdlib ET iterparse | 284k | 38.2 | 20 | 1 | iterparse + root.clear() |
-| xmltodict | 87k | 11.7 | 471 | 1 | whole-document dict |
-| simdxml (Python) | 554k | 74.4 | 1063 | 1 | per-item dicts, whole-doc parse |
-| simdxml parallel (Python) | 498k | 67.0 | 1062 | 16 | per-item dicts, parallel SIMD parse |
-| quick-xml 0.37.5 | 3.3M | 444.0 | 251 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.6M | 210.2 | 722 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.1M | 279.3 | 774 | 1 | parse+count only, no data |
+| xmlstreamer-ng per-item | 458k | 61.6 | 76 | 1 | per-item dicts |
+| XmlSource columnar | 1.9M | 250.6 | 319 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 9.5M | 1269.9 | 369 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 8.0M | 1076.0 | 204 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 93k | 12.5 | 35 | 1 | per-item dicts |
+| lxml iterparse | 550k | 73.9 | 22 | 1 | iterparse + clear() |
+| stdlib ET iterparse | 302k | 40.6 | 20 | 1 | iterparse + root.clear() |
+| xmltodict | 90k | 12.0 | 471 | 1 | whole-document dict |
+| simdxml (Python) | 591k | 79.4 | 1061 | 1 | per-item dicts, whole-doc parse |
+| simdxml parallel (Python) | 555k | 74.6 | 1060 | 16 | per-item dicts, parallel SIMD parse |
+| quick-xml 0.37.5 | 3.5M | 464.6 | 300 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 2.0M | 262.4 | 722 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.5M | 339.6 | 773 | 1 | parse+count only, no data |
 
 ## How to read it
 
