@@ -119,6 +119,16 @@ for batch in XmlSource("big.xml", separator_tag="item").iter_record_batches(thre
 `xmlstreamer_ng` registers it so `rypipe.read("feed.xml", separator_tag="item")`
 works too.
 
+Drop semantics are the streaming path's: a malformed item is skipped, but
+the skip is logged at `WARNING` on the `xmlstreamer_ng` logger and counted.
+The same holds for a comment, CDATA section, or processing instruction that
+never closes (the rest of the chunk is discarded and the warning says how
+many bytes) and for closing delimiters with junk such as `</item junk>`,
+which still end the row but are counted as malformed. After a read finishes,
+`_xmlstreamer.last_read_diagnostics()` returns the counters (a clean read
+returns `None`); `iter_xml_batches_par` reports when its iterator is
+exhausted.
+
 Local data uses the same pipeline: pass `source=` instead of `url=` - a
 filesystem path or any binary file-like object (`io.BytesIO(...)` in a unit
 test, `sys.stdin.buffer` in a pipe). Gzip and encoding detection still apply,
