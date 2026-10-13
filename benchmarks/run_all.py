@@ -61,7 +61,9 @@ def main() -> None:
     print(
         f"Date: {date.today().isoformat()} | CPU: {_cpu_model()} | "
         f"Python {platform.python_version()} | "
-        f"xmlstreamer {_dist_version('xmlstreamer-ng')}, lxml {version('lxml')}, "
+        f"xmlstreamer_ng {_dist_version('xmlstreamer-ng')}, "
+        f"xmlstreamer (original) {version('xmlstreamer')}, "
+        f"lxml {version('lxml')}, "
         f"xmltodict {version('xmltodict')}, chardet {version('chardet')}"
     )
     if args.quick:

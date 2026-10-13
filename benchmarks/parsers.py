@@ -42,6 +42,17 @@ def consume_xmlstreamer(source: BinaryIO, sink: SinkT) -> None:
         sink(item.parsed_content)
 
 
+def consume_xmlstreamer_original(source: BinaryIO, sink: SinkT) -> None:
+    """The original carlosplanchon/xmlstreamer package (PyPI: xmlstreamer),
+    the baseline this fork exists to beat. StreamInterpreter handles the
+    encoding detection and tokenizing itself."""
+    from xmlstreamer import StreamInterpreter
+
+    interpreter = StreamInterpreter(source=source, separator_tag="item")
+    for item in interpreter:
+        sink(item)
+
+
 def consume_lxml(source: BinaryIO, sink: SinkT) -> None:
     """lxml.etree.iterparse(recover=True) with the documented cleanup
     idiom, so processed elements do not accumulate."""
@@ -98,6 +109,7 @@ def consume_xmltodict_stream(source: BinaryIO, sink: SinkT) -> None:
 # Short keys double as CLI arguments for the memory workers.
 PARSERS = {
     "xmlstreamer_ng": consume_xmlstreamer,
+    "xmlstreamer_orig": consume_xmlstreamer_original,
     "lxml": consume_lxml,
     "stdlib": consume_stdlib,
     "xmltodict": consume_xmltodict,
@@ -105,7 +117,8 @@ PARSERS = {
 }
 
 LABELS = {
-    "xmlstreamer_ng": "xmlstreamer_ng",
+    "xmlstreamer_ng": "xmlstreamer-ng",
+    "xmlstreamer_orig": "xmlstreamer (original)",
     "lxml": "lxml iterparse (recover=True)",
     "stdlib": "stdlib ElementTree iterparse",
     "xmltodict": "xmltodict",
