@@ -64,7 +64,9 @@ def main() -> None:
         f"xmlstreamer_ng {_dist_version('xmlstreamer-ng')}, "
         f"xmlstreamer (original) {version('xmlstreamer')}, "
         f"lxml {version('lxml')}, "
-        f"xmltodict {version('xmltodict')}, chardet {version('chardet')}"
+        f"xmltodict {version('xmltodict')}, "
+        f"simdxml {version('simdxml')}, "
+        f"chardet {version('chardet')}"
     )
     if args.quick:
         print("\nMode: --quick (smoke sizes; numbers are NOT representative)")

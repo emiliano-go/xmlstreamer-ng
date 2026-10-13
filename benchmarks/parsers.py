@@ -106,6 +106,26 @@ def consume_xmltodict_stream(source: BinaryIO, sink: SinkT) -> None:
     xmltodict.parse(source, item_depth=2, item_callback=callback)
 
 
+def consume_simdxml(source: BinaryIO, sink: SinkT) -> None:
+    """simdxml (Rust engine, PyPI): whole document parsed in memory,
+    then per-item records are materialized from xpath("//item")."""
+    import simdxml
+
+    doc = simdxml.parse(source.read())
+    for element in doc.xpath("//item"):
+        sink({child.tag: child.text for child in element})
+
+
+def consume_simdxml_par(source: BinaryIO, sink: SinkT) -> None:
+    """simdxml with parallel=True (multi-threaded SIMD structural
+    indexing for large documents)."""
+    import simdxml
+
+    doc = simdxml.parse(source.read(), parallel=True)
+    for element in doc.xpath("//item"):
+        sink({child.tag: child.text for child in element})
+
+
 # Short keys double as CLI arguments for the memory workers.
 PARSERS = {
     "xmlstreamer_ng": consume_xmlstreamer,
@@ -114,6 +134,8 @@ PARSERS = {
     "stdlib": consume_stdlib,
     "xmltodict": consume_xmltodict,
     "xmltodict-stream": consume_xmltodict_stream,
+    "simdxml": consume_simdxml,
+    "simdxml-par": consume_simdxml_par,
 }
 
 LABELS = {
@@ -123,4 +145,6 @@ LABELS = {
     "stdlib": "stdlib ElementTree iterparse",
     "xmltodict": "xmltodict",
     "xmltodict-stream": "xmltodict (streaming mode)",
+    "simdxml": "simdxml (Rust engine)",
+    "simdxml-par": "simdxml (Rust engine, parallel parse)",
 }

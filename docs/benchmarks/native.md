@@ -1,6 +1,6 @@
 # Native parse-throughput references (speed only)
 
-Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | quick-xml 0.37.5 (Rust 1.99.0, lto), simdxml 0.2.1 (git `github.com/simdxml/simdxml`, SIMD structural indexing), pugixml 1.15 (GCC 16.2.1, `-O3 -march=native`)
+Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | quick-xml 0.37.5 (Rust 1.99.0, lto), simdxml 0.2.1 (git `github.com/simdxml/simdxml`, SIMD structural indexing), pugixml 1.15 (GCC 16.2.1, `-O3 -march=native`)
 
 Measured by `benchmarks/native_bench.py` against the same deterministic
 feeds the Python harness uses, best of 3 rounds inside each binary
@@ -8,15 +8,15 @@ feeds the Python harness uses, best of 3 rounds inside each binary
 
 | feed | parser | items | seconds | items/s | MB/s |
 |---|---|---|---|---|---|
-| plain 100,000 | quick-xml | 100,000 | 0.032 | 3,170,074 | 422.9 |
-| plain 100,000 | simdxml | 100,000 | 0.052 | 1,914,205 | 255.4 |
-| plain 100,000 | pugixml | 100,000 | 0.052 | 1,906,033 | 254.3 |
-| cdata 50,000 | quick-xml | 50,000 | 0.023 | 2,159,174 | 1,018.8 |
-| cdata 50,000 | simdxml | 50,000 | 0.033 | 1,502,359 | 708.9 |
-| cdata 50,000 | pugixml | 50,000 | 0.031 | 1,594,286 | 752.3 |
-| plain 128 MiB | quick-xml | 953,250 | 0.297 | 3,211,737 | 431.5 |
-| plain 128 MiB | simdxml | 953,250 | 0.630 | 1,513,251 | 203.3 |
-| plain 128 MiB | pugixml | 953,250 | 0.506 | 1,882,900 | 253.0 |
+| plain 100,000 | quick-xml | 100,000 | 0.030 | 3,383,179 | 451.3 |
+| plain 100,000 | simdxml | 100,000 | 0.042 | 2,355,269 | 314.2 |
+| plain 100,000 | pugixml | 100,000 | 0.039 | 2,576,456 | 343.7 |
+| cdata 50,000 | quick-xml | 50,000 | 0.022 | 2,293,157 | 1,082.0 |
+| cdata 50,000 | simdxml | 50,000 | 0.029 | 1,713,620 | 808.6 |
+| cdata 50,000 | pugixml | 50,000 | 0.023 | 2,210,042 | 1,042.8 |
+| plain 128 MiB | quick-xml | 953,250 | 0.284 | 3,356,278 | 450.9 |
+| plain 128 MiB | simdxml | 953,250 | 0.513 | 1,859,688 | 249.9 |
+| plain 128 MiB | pugixml | 953,250 | 0.393 | 2,423,963 | 325.7 |
 
 What these are, and what they are not:
 

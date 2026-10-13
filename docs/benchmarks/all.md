@@ -17,23 +17,23 @@ note; build them with `benchmarks/native/build_native.sh`.
 
 ## Results
 
-Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer-ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, pyarrow 26.0.0; quick-xml 0.37.5, simdxml 0.2.1 (git), pugixml 1.15
+Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer-ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python) 0.3.0, pyarrow 26.0.0; quick-xml 0.37.5, simdxml 0.2.1 (git), pugixml 1.15
 
 | engine | items/s | MB/s | peak RSS MB | threads | API/notes |
 |---|---|---|---|---|---|
-| xmlstreamer-ng per-item | 276k | 37.0 | 76 | 1 | per-item dicts |
-| XmlSource columnar | 1.1M | 145.8 | 319 | 1 | Arrow batches |
-| XmlSource parallel (8 threads) | 5.7M | 770.9 | 274 | 8 | Arrow batches, 8 threads |
-| XmlSource bounded parallel streaming | 4.7M | 631.4 | 205 | 8 | bounded batches, 8 threads |
-| xmlstreamer (original) | 85k | 11.4 | 35 | 1 | per-item dicts |
-| lxml iterparse | 504k | 67.7 | 22 | 1 | iterparse + clear() |
-| stdlib ET iterparse | 279k | 37.5 | 20 | 1 | iterparse + root.clear() |
+| xmlstreamer-ng per-item | 273k | 36.7 | 76 | 1 | per-item dicts |
+| XmlSource columnar | 1.2M | 156.3 | 301 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 6.2M | 835.5 | 275 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 5.2M | 703.3 | 197 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 88k | 11.9 | 35 | 1 | per-item dicts |
+| lxml iterparse | 528k | 70.9 | 22 | 1 | iterparse + clear() |
+| stdlib ET iterparse | 284k | 38.2 | 20 | 1 | iterparse + root.clear() |
 | xmltodict | 87k | 11.7 | 471 | 1 | whole-document dict |
-| quick-xml 0.37.5 | 3.3M | 444.6 | 246 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.6M | 220.3 | 721 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.2M | 297.6 | 773 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.6M | 210.2 | 721 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.1M | 278.6 | 774 | 1 | parse+count only, no data |
+| simdxml (Python) | 554k | 74.4 | 1063 | 1 | per-item dicts, whole-doc parse |
+| simdxml parallel (Python) | 498k | 67.0 | 1062 | 16 | per-item dicts, parallel SIMD parse |
+| quick-xml 0.37.5 | 3.3M | 444.0 | 251 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.6M | 210.2 | 722 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.1M | 279.3 | 774 | 1 | parse+count only, no data |
 
 ## How to read it
 
@@ -54,6 +54,14 @@ Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xml
   workload, so it is not comparable with the RSS of engines that
   materialize data (the xmlstreamer-ng parallel rows hold the full
   Arrow table; xmltodict holds the whole document dict).
+- The two simdxml (Python) rows use the PyPI `simdxml` package
+  (0.3.0, Rust engine with Python bindings): the whole document is
+  parsed in memory, then per-item dicts are materialized from
+  `xpath("//item")`. Its peak RSS is high because the parsed document
+  and the element wrappers coexist in memory; the parallel variant
+  (`parse(parallel=True)`) only parallelizes the SIMD structural
+  indexing, not the Python-side record extraction, so it is barely
+  faster on this feed.
 - Per-feed speed, peak memory, adapter scaling and dirty-feed
   behavior live in the sibling documents (`run_all.md`, `scaling.md`,
   `native.md`); this table is the summary, those are the detail.

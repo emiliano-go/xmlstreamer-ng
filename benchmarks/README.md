@@ -25,7 +25,11 @@ each written in that library's best streaming idiom: lxml gets
 `iterparse` plus the documented `clear()`/delete-siblings cleanup,
 stdlib ElementTree gets `iterparse` plus `root.clear()`, xmltodict is
 measured both as commonly used (whole document) and in its streaming
-mode (`item_depth`/`item_callback`). xmlstreamer-ng runs its full local
+mode (`item_depth`/`item_callback`). The simdxml rows use the PyPI
+`simdxml` package (Rust engine with Python bindings): the whole document
+is parsed in memory, then per-item dicts are materialized from
+`xpath("//item")`; the parallel row passes `parallel=True` to the parse.
+xmlstreamer-ng runs its full local
 pipeline including the startup encoding sniff, and the original
 `xmlstreamer` 2.2.0 runs its `StreamInterpreter` over the same bytes.
 Rounds are interleaved across parsers so CPU frequency drift hits
@@ -75,7 +79,7 @@ exist and skips it with a note otherwise.
 
 ## Results
 
-Date: 2026-10-12 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer_ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, chardet 7.6.0
+Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer_ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml 0.3.0, chardet 7.6.0
 
 ### All engines, one feed (consolidated)
 
@@ -85,23 +89,23 @@ Every engine reads the same 128 MiB plain feed (953,250 items). Peak RSS
 for the Python engines is measured in a fresh subprocess; for the native
 counters it comes from the process rusage.
 
-Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer-ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, pyarrow 26.0.0; quick-xml 0.37.5, simdxml 0.2.1 (git), pugixml 1.15
+Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer-ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python) 0.3.0, pyarrow 26.0.0; quick-xml 0.37.5, simdxml 0.2.1 (git), pugixml 1.15
 
 | engine | items/s | MB/s | peak RSS MB | threads | API/notes |
 |---|---|---|---|---|---|
-| xmlstreamer-ng per-item | 276k | 37.0 | 76 | 1 | per-item dicts |
-| XmlSource columnar | 1.1M | 145.8 | 319 | 1 | Arrow batches |
-| XmlSource parallel (8 threads) | 5.7M | 770.9 | 274 | 8 | Arrow batches, 8 threads |
-| XmlSource bounded parallel streaming | 4.7M | 631.4 | 205 | 8 | bounded batches, 8 threads |
-| xmlstreamer (original) | 85k | 11.4 | 35 | 1 | per-item dicts |
-| lxml iterparse | 504k | 67.7 | 22 | 1 | iterparse + clear() |
-| stdlib ET iterparse | 279k | 37.5 | 20 | 1 | iterparse + root.clear() |
+| xmlstreamer-ng per-item | 273k | 36.7 | 76 | 1 | per-item dicts |
+| XmlSource columnar | 1.2M | 156.3 | 301 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 6.2M | 835.5 | 275 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 5.2M | 703.3 | 197 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 88k | 11.9 | 35 | 1 | per-item dicts |
+| lxml iterparse | 528k | 70.9 | 22 | 1 | iterparse + clear() |
+| stdlib ET iterparse | 284k | 38.2 | 20 | 1 | iterparse + root.clear() |
 | xmltodict | 87k | 11.7 | 471 | 1 | whole-document dict |
-| quick-xml 0.37.5 | 3.3M | 444.6 | 246 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.6M | 220.3 | 721 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.2M | 297.6 | 773 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.6M | 210.2 | 721 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.1M | 278.6 | 774 | 1 | parse+count only, no data |
+| simdxml (Python) | 554k | 74.4 | 1063 | 1 | per-item dicts, whole-doc parse |
+| simdxml parallel (Python) | 498k | 67.0 | 1062 | 16 | per-item dicts, parallel SIMD parse |
+| quick-xml 0.37.5 | 3.3M | 444.0 | 251 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.6M | 210.2 | 722 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.1M | 279.3 | 774 | 1 | parse+count only, no data |
 
 Native rows are speed-only references (parse and count, no encoding
 detection, recovery contract, or data materialization); their RSS
@@ -135,11 +139,11 @@ details and caveats in
 
 | feed | parser | items/s | MB/s |
 |---|---|---|---|
-| plain 128 MiB | quick-xml | 3,211,737 | 431.5 |
-| plain 128 MiB | simdxml | 1,513,251 | 203.3 |
-| plain 128 MiB | pugixml | 1,882,900 | 253.0 |
-| cdata 50,000 | quick-xml | 2,159,174 | 1,018.8 |
-| plain 100,000 | quick-xml | 3,170,074 | 422.9 |
+| plain 128 MiB | quick-xml | 3,356,278 | 450.9 |
+| plain 128 MiB | simdxml | 1,859,688 | 249.9 |
+| plain 128 MiB | pugixml | 2,423,963 | 325.7 |
+| cdata 50,000 | quick-xml | 2,293,157 | 1,082.0 |
+| plain 100,000 | quick-xml | 3,383,179 | 451.3 |
 
 These rows are raw parse speed only (no Python semantics): a ruler for
 the tables above, not a like-for-like comparison. On the big feed,
@@ -151,19 +155,23 @@ counter in MB/s.
 
 | feed | parser | items | seconds | items/s |
 |---|---|---|---|---|
-| plain | xmlstreamer-ng | 100,000 | 0.317 | 315,410 |
-| plain | xmlstreamer (original) | 100,000 | 1.230 | 81,308 |
-| plain | lxml iterparse (recover=True) | 100,000 | 0.322 | 310,292 |
-| plain | stdlib ElementTree iterparse | 100,000 | 0.419 | 238,816 |
-| plain | xmltodict | 100,000 | 1.234 | 81,017 |
-| plain | xmltodict (streaming mode) | 100,000 | 1.191 | 83,998 |
-| cdata | xmlstreamer-ng | 50,000 | 0.203 | 246,843 |
-| cdata | xmlstreamer (original) | 50,000 | 0.802 | 62,347 |
-| cdata | lxml iterparse (recover=True) | 50,000 | 0.276 | 181,023 |
-| cdata | stdlib ElementTree iterparse | 50,000 | 0.252 | 198,112 |
-| cdata | xmltodict | 50,000 | 0.719 | 69,503 |
-| cdata | xmltodict (streaming mode) | 50,000 | 0.677 | 73,885 |
-| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 0.382 | 261,829 |
+| plain | xmlstreamer-ng | 100,000 | 0.292 | 341,955 |
+| plain | xmlstreamer (original) | 100,000 | 1.144 | 87,450 |
+| plain | lxml iterparse (recover=True) | 100,000 | 0.312 | 320,639 |
+| plain | stdlib ElementTree iterparse | 100,000 | 0.397 | 251,872 |
+| plain | xmltodict | 100,000 | 1.153 | 86,694 |
+| plain | xmltodict (streaming mode) | 100,000 | 1.112 | 89,960 |
+| plain | simdxml (Rust engine) | 100,000 | 0.176 | 567,171 |
+| plain | simdxml (Rust engine, parallel parse) | 100,000 | 0.161 | 622,415 |
+| cdata | xmlstreamer-ng | 50,000 | 0.187 | 268,008 |
+| cdata | xmlstreamer (original) | 50,000 | 0.746 | 67,014 |
+| cdata | lxml iterparse (recover=True) | 50,000 | 0.248 | 201,219 |
+| cdata | stdlib ElementTree iterparse | 50,000 | 0.234 | 213,485 |
+| cdata | xmltodict | 50,000 | 0.626 | 79,905 |
+| cdata | xmltodict (streaming mode) | 50,000 | 0.593 | 84,266 |
+| cdata | simdxml (Rust engine) | 50,000 | 0.095 | 523,781 |
+| cdata | simdxml (Rust engine, parallel parse) | 50,000 | 0.094 | 533,244 |
+| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 0.355 | 281,826 |
 
 ### Peak memory (one subprocess per parser, RSS)
 
@@ -200,9 +208,12 @@ counter in MB/s.
 - On raw parse speed the Rust engine put xmlstreamer-ng ahead of lxml and
   the stdlib on both feed shapes in this run, and ~3.9x (flat) to ~4.0x
   (CDATA) ahead of the original pure-Python xmlstreamer 2.2.0, the fork's
-  baseline; xmltodict trails on both. Absolute numbers move with the
-  machine's thermal state between runs; the ratios between parsers are far
-  more stable, and those are the numbers worth reading.
+  baseline; xmltodict trails on both. The simdxml (Rust engine) rows are
+  faster still on both feeds, but they are whole-document parsers: no
+  streaming contract, no recovery semantics, and ~1 GB peak RSS on the
+  128 MiB feed (see the consolidated table). Absolute numbers move with
+  the machine's thermal state between runs; the ratios between parsers
+  are far more stable, and those are the numbers worth reading.
 - On memory, every streaming parser is flat (16-75 MB on this run). The
   original xmlstreamer 2.2.0 peaked lowest (34 MB): its per-item Python
   dicts are transient, while xmlstreamer-ng's 75 MB carries the Rust

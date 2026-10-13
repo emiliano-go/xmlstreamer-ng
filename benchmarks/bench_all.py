@@ -7,8 +7,9 @@ columnar/parallel adapter paths and the native counters can all read it.
 Rows: xmlstreamer-ng per-item (StreamInterpreter), XmlSource columnar,
 XmlSource parallel (8 threads), XmlSource bounded parallel streaming,
 xmlstreamer (original), lxml iterparse, stdlib ET iterparse, xmltodict,
-plus the native parse+count references (quick-xml, simdxml, pugixml)
-when their binaries exist.
+the simdxml Python package (Rust engine, whole-doc parse + xpath
+per-item dicts, serial and parallel), plus the native parse+count
+references (quick-xml, simdxml, pugixml) when their binaries exist.
 
 Timing is best-of-N in this process. Peak RSS for the Python engines is
 measured in a fresh ``--worker`` subprocess (VmHWM from
@@ -31,7 +32,7 @@ import time
 from datetime import date
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -148,6 +149,29 @@ def _xmltodict(path: str) -> int:
     return len(items)
 
 
+def _simdxml(path: str, parallel: bool = False) -> int:
+    import simdxml
+
+    with open(path, "rb") as source:
+        doc = simdxml.parse(source.read(), parallel=parallel)
+    count = 0
+    for element in doc.xpath("//item"):
+        _ = {child.tag: child.text for child in element}
+        count += 1
+    global _SIMDXML_SANITY_PRINTED
+    if not _SIMDXML_SANITY_PRINTED:
+        _SIMDXML_SANITY_PRINTED = True
+        print(f"[sanity] simdxml visited {count} <item> elements", file=sys.stderr)
+    return count
+
+
+_SIMDXML_SANITY_PRINTED = False
+
+
+def _simdxml_cpus() -> int:
+    return os.cpu_count() or 1
+
+
 # name -> (callable, threads, note)
 ENGINES: Dict[str, Tuple[Callable[[str], int], int, str]] = {
     "xmlstreamer-ng per-item": (_ng_per_item, 1, "per-item dicts"),
@@ -160,6 +184,14 @@ ENGINES: Dict[str, Tuple[Callable[[str], int], int, str]] = {
     "lxml iterparse": (_lxml, 1, "iterparse + clear()"),
     "stdlib ET iterparse": (_stdlib, 1, "iterparse + root.clear()"),
     "xmltodict": (_xmltodict, 1, "whole-document dict"),
+    "simdxml (Python)": (
+        lambda path: _simdxml(path), 1,
+        "per-item dicts, whole-doc parse",
+    ),
+    "simdxml parallel (Python)": (
+        lambda path: _simdxml(path, parallel=True), _simdxml_cpus(),
+        "per-item dicts, parallel SIMD parse",
+    ),
 }
 
 ROWS_ORDER = list(ENGINES) + list(NATIVE_BINS)
@@ -330,6 +362,7 @@ def render_markdown(rows: List[dict], extras: Dict[str, str], feed_mb: int) -> s
         f"xmlstreamer (original) {_dist_version('xmlstreamer')}, "
         f"lxml {_dist_version('lxml')}, "
         f"xmltodict {_dist_version('xmltodict')}, "
+        f"simdxml (Python) {_dist_version('simdxml')}, "
         f"pyarrow {_dist_version('pyarrow')}; "
         + ", ".join(f"{n} {v}" for n, v in NATIVE_VERSIONS.items()),
         "",
