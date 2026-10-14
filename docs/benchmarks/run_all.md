@@ -1,40 +1,40 @@
 # xmlstreamer benchmarks
 
-Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xmlstreamer_ng 1.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml 0.3.0, chardet 7.6.0
+Date: 2026-10-14 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.13.15 | xmlstreamer_ng 2.0.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml 0.3.0, chardet 7.6.0
 
 ## Speed (parse-only, same in-memory bytes, best of N)
 
 | feed | parser | items | seconds | items/s |
 |---|---|---|---|---|
-| plain | xmlstreamer-ng | 100,000 | 0.190 | 527,677 |
-| plain | xmlstreamer (original) | 100,000 | 1.153 | 86,723 |
-| plain | lxml iterparse (recover=True) | 100,000 | 0.312 | 320,585 |
-| plain | stdlib ElementTree iterparse | 100,000 | 0.398 | 251,038 |
-| plain | xmltodict | 100,000 | 1.153 | 86,713 |
-| plain | xmltodict (streaming mode) | 100,000 | 1.117 | 89,540 |
-| plain | simdxml (Rust engine) | 100,000 | 0.159 | 630,061 |
-| plain | simdxml (Rust engine, parallel parse) | 100,000 | 0.157 | 636,401 |
-| cdata | xmlstreamer-ng | 50,000 | 0.135 | 371,470 |
-| cdata | xmlstreamer (original) | 50,000 | 0.734 | 68,118 |
-| cdata | lxml iterparse (recover=True) | 50,000 | 0.249 | 200,892 |
-| cdata | stdlib ElementTree iterparse | 50,000 | 0.247 | 202,352 |
-| cdata | xmltodict | 50,000 | 0.634 | 78,813 |
-| cdata | xmltodict (streaming mode) | 50,000 | 0.605 | 82,582 |
-| cdata | simdxml (Rust engine) | 50,000 | 0.097 | 514,440 |
-| cdata | simdxml (Rust engine, parallel parse) | 50,000 | 0.097 | 515,876 |
-| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 0.239 | 418,974 |
+| plain | xmlstreamer-ng | 100,000 | 0.139 | 720,203 |
+| plain | xmlstreamer (original) | 100,000 | 0.942 | 106,183 |
+| plain | lxml iterparse (recover=True) | 100,000 | 0.311 | 321,611 |
+| plain | stdlib ElementTree iterparse | 100,000 | 0.333 | 300,736 |
+| plain | xmltodict | 100,000 | 0.987 | 101,340 |
+| plain | xmltodict (streaming mode) | 100,000 | 0.943 | 106,061 |
+| plain | simdxml (Rust engine) | 100,000 | 0.186 | 537,246 |
+| plain | simdxml (Rust engine, parallel parse) | 100,000 | 0.158 | 633,037 |
+| cdata | xmlstreamer-ng | 50,000 | 0.089 | 558,813 |
+| cdata | xmlstreamer (original) | 50,000 | 0.598 | 83,599 |
+| cdata | lxml iterparse (recover=True) | 50,000 | 0.256 | 195,416 |
+| cdata | stdlib ElementTree iterparse | 50,000 | 0.185 | 270,312 |
+| cdata | xmltodict | 50,000 | 0.536 | 93,299 |
+| cdata | xmltodict (streaming mode) | 50,000 | 0.494 | 101,250 |
+| cdata | simdxml (Rust engine) | 50,000 | 0.102 | 488,351 |
+| cdata | simdxml (Rust engine, parallel parse) | 50,000 | 0.098 | 512,491 |
+| plain | xmlstreamer end-to-end (HTTP) | 100,000 | 0.191 | 523,783 |
 
 ## Peak memory (one subprocess per parser, RSS)
 
 | parser | feed MB | peak RSS MB | items | seconds |
 |---|---|---|---|---|
-| (python + imports baseline) | 121 | 15 | 0 | 0.00 |
-| xmlstreamer-ng | 121 | 75 | 900,000 | 1.84 |
-| xmlstreamer (original) | 121 | 33 | 900,000 | 10.76 |
-| lxml iterparse (recover=True) | 121 | 20 | 900,000 | 2.91 |
-| stdlib ElementTree iterparse | 121 | 16 | 900,000 | 3.77 |
-| xmltodict (streaming mode) | 121 | 24 | 900,000 | 10.47 |
-| xmltodict | 121 | 444 | 900,000 | 11.10 |
+| (python + imports baseline) | 121 | 16 | 0 | 0.00 |
+| xmlstreamer-ng | 121 | 72 | 900,000 | 1.41 |
+| xmlstreamer (original) | 121 | 32 | 900,000 | 8.46 |
+| lxml iterparse (recover=True) | 121 | 23 | 900,000 | 2.69 |
+| stdlib ElementTree iterparse | 121 | 17 | 900,000 | 2.91 |
+| xmltodict (streaming mode) | 121 | 22 | 900,000 | 8.43 |
+| xmltodict | 121 | 442 | 900,000 | 8.84 |
 
 ## Dirty-feed gauntlet (what each parser does to broken input)
 
@@ -58,14 +58,14 @@ Date: 2026-10-13 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.14.8 | xml
 
 | feed | parser | items | seconds | items/s | MB/s |
 |---|---|---|---|---|---|
-| plain 100,000 | quick-xml | 100,000 | 0.030 | 3,340,794 | 445.7 |
-| plain 100,000 | simdxml | 100,000 | 0.049 | 2,040,650 | 272.2 |
-| plain 100,000 | pugixml | 100,000 | 0.041 | 2,430,075 | 324.2 |
-| cdata 50,000 | quick-xml | 50,000 | 0.023 | 2,130,288 | 1,005.2 |
-| cdata 50,000 | simdxml | 50,000 | 0.031 | 1,618,909 | 763.9 |
-| cdata 50,000 | pugixml | 50,000 | 0.025 | 1,976,597 | 932.7 |
-| plain 128 MiB | quick-xml | 953,250 | 0.292 | 3,261,148 | 438.2 |
-| plain 128 MiB | simdxml | 953,250 | 0.451 | 2,114,987 | 284.2 |
-| plain 128 MiB | pugixml | 953,250 | 0.418 | 2,282,922 | 306.7 |
+| plain 100,000 | quick-xml | 100,000 | 0.031 | 3,178,741 | 424.1 |
+| plain 100,000 | simdxml | 100,000 | 0.066 | 1,509,730 | 201.4 |
+| plain 100,000 | pugixml | 100,000 | 0.045 | 2,210,775 | 294.9 |
+| cdata 50,000 | quick-xml | 50,000 | 0.023 | 2,193,367 | 1,035.0 |
+| cdata 50,000 | simdxml | 50,000 | 0.049 | 1,022,432 | 482.4 |
+| cdata 50,000 | pugixml | 50,000 | 0.028 | 1,793,400 | 846.2 |
+| plain 128 MiB | quick-xml | 953,250 | 0.307 | 3,105,949 | 417.3 |
+| plain 128 MiB | simdxml | 953,250 | 0.603 | 1,579,567 | 212.2 |
+| plain 128 MiB | pugixml | 953,250 | 0.464 | 2,054,210 | 276.0 |
 
 These binaries fully parse the file and count <item> elements. They carry none of the Python layer semantics (encoding detection, recovery contract, Arrow materialization): an upper-bound ruler, not a like-for-like parser comparison. Build them with benchmarks/native/build_native.sh.
