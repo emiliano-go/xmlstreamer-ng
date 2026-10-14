@@ -847,7 +847,9 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
 name = "rypipe-core"
-version = "0.5.1"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aac95ed9a842bda8cb0595c049ebb56e686d854ab497f83c23f7afbb18df53a6"
 dependencies = [
  "arrow",
  "chrono",
@@ -868,9 +870,9 @@ dependencies = [
 
 [[package]]
 name = "rypipe-python"
-version = "0.5.1"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1902b04ec5a12881823f6e345ff8c490d3503ccc1d25402619154dc415884c8"
+checksum = "11468440ff8cfd72c1a2a2fe45010842963856d157abdcc33844f18a24a1be50"
 dependencies = [
  "arrow",
  "mimalloc",
@@ -1116,7 +1118,7 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 
 [[package]]
 name = "xmlstreamer-native"
-version = "1.1.0"
+version = "2.0.0"
 dependencies = [
  "memchr",
  "pyo3",
