@@ -848,8 +848,6 @@ checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 [[package]]
 name = "rypipe-core"
 version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3a7eaa8c24c1cab7fffd20b04c189ddf04cedb5a86ec98b03fead90b64eacff7"
 dependencies = [
  "arrow",
  "chrono",

@@ -168,3 +168,6 @@ uv.lock
 
 # Rust build artifacts for the rypipe-backed engine:
 native/target/
+
+# PGO build scratch (native/build_pgo.sh)
+native/.pgo/
