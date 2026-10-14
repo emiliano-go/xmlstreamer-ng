@@ -278,6 +278,11 @@ impl XmlParser {
         let stats = &*self.stats;
         let mut i = 0usize;
         loop {
+            // Stop promptly when the sink aborted (e.g. the consumer of a
+            // bounded single-pass read went away).
+            if sink.should_stop() {
+                break;
+            }
             let mut open_unterminated = false;
             let Some((start, after_open)) =
                 scan::find_open_sep_ex(bytes, i, &self.sep, &mut open_unterminated)

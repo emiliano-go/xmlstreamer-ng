@@ -44,6 +44,22 @@ const fn build_hazard(strict: bool) -> [bool; 256] {
 static HAZARD_STRICT: [bool; 256] = build_hazard(true);
 static HAZARD_FAST: [bool; 256] = build_hazard(false);
 
+/// Hazard scan for a CDATA run: non-ASCII, CR, and (in strict mode) forbidden
+/// controls force the precise path. Unlike a text run, `]` is not a hazard
+/// here: the run already ends at the first `]]>`.
+const fn build_cdata_hazard(strict: bool) -> [bool; 256] {
+    let mut t = [false; 256];
+    let mut b = 0usize;
+    while b < 256 {
+        let c = b as u8;
+        t[b] = c >= 0x80 || c == b'\r' || (strict && c < 0x20 && c != b'\t' && c != b'\n');
+        b += 1;
+    }
+    t
+}
+static CDATA_HAZARD: [bool; 256] = build_cdata_hazard(false);
+static CDATA_HAZARD_STRICT: [bool; 256] = build_cdata_hazard(true);
+
 #[inline]
 fn is_xml_ws(b: u8) -> bool {
     XML_WS_LUT[b as usize]
@@ -1278,6 +1294,76 @@ fn read_text_run(
     Some(i)
 }
 
+/// True iff every byte is in `0x20..=0x7F` — printable ASCII: no CR, no
+/// control, no non-ASCII. Such a run can be borrowed verbatim. Processes eight
+/// bytes at a time (SWAR) instead of one at a time.
+#[inline]
+fn all_printable_ascii(raw: &[u8]) -> bool {
+    const LO: u64 = 0x2020_2020_2020_2020;
+    const HI: u64 = 0x8080_8080_8080_8080;
+    let mut chunks = raw.chunks_exact(8);
+    for c in &mut chunks {
+        let w = u64::from_le_bytes([
+            c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
+        ]);
+        // High bit set for any byte (non-ASCII).
+        if w & HI != 0 {
+            return false;
+        }
+        // Any byte < 0x20 (borrow trick is exact once high bits are clear).
+        if w.wrapping_sub(LO) & !w & HI != 0 {
+            return false;
+        }
+    }
+    chunks
+        .remainder()
+        .iter()
+        .all(|&b| (0x20..0x80).contains(&b))
+}
+
+/// Append a CDATA section's character data to `target`. CDATA is literal: no
+/// entity expansion. The value is the raw bytes with CR normalized and invalid
+/// UTF-8 replaced, exactly what the general parser produces. A lone `]` is not
+/// a hazard: the section already ends at the first `]]>`.
+fn push_cdata(
+    target: &mut TextBuf,
+    bytes: &[u8],
+    start: usize,
+    end: usize,
+    strict: bool,
+) -> Option<()> {
+    let raw = &bytes[start..end];
+    // Fast tier: printable ASCII borrows verbatim, no per-byte work.
+    if all_printable_ascii(raw) {
+        target.push_run(bytes, start, end);
+        return Some(());
+    }
+    // Precise tier: tab/LF, non-ASCII, CR or (strict) controls take the LUT
+    // hazard scan, then UTF-8 validation and line-ending normalization.
+    let lut = if strict { &CDATA_HAZARD_STRICT } else { &CDATA_HAZARD };
+    if !raw.iter().any(|&b| lut[b as usize]) {
+        target.push_run(bytes, start, end);
+        return Some(());
+    }
+    if let Ok(run) = std::str::from_utf8(raw) {
+        if strict && has_forbidden_char(run) {
+            return None;
+        }
+        if !run.contains('\r') {
+            target.push_run(bytes, start, end);
+            return Some(());
+        }
+    }
+    let text = String::from_utf8_lossy(raw);
+    if strict && has_forbidden_char(&text) {
+        return None;
+    }
+    let mut normalized = String::with_capacity(text.len());
+    push_normalized(&mut normalized, &text);
+    target.push_owned(bytes, normalized);
+    Some(())
+}
+
 /// Skip an unwanted depth-1 subtree, returning the index just past its
 /// matching end tag. Strict mode validates every tag, attribute and text run
 /// inside it; fast mode skips lexically (the caller opted out of validation).
@@ -1449,13 +1535,31 @@ fn try_flat_item<E: FlatEmitter>(
                     }
                 }
                 let mut tb = TextBuf::default();
-                let vend = read_text_run(bytes, after, strict, &mut tb)?;
+                let mut p = after;
+                // Direct character data of a flat field: text runs (with
+                // entity expansion) and inline CDATA sections, nothing else.
+                // A comment, PI or nested element gives up to the general path.
+                loop {
+                    if p >= n {
+                        return None;
+                    }
+                    if bytes[p] == b'<' {
+                        if bytes[p..].starts_with(b"</") {
+                            break;
+                        }
+                        if bytes[p..].starts_with(b"<![CDATA[") {
+                            let end = find_seq(bytes, p + 9, b"]]>")?;
+                            push_cdata(&mut tb, bytes, p + 9, end, strict)?;
+                            p = end + 3;
+                            continue;
+                        }
+                        return None;
+                    }
+                    p = read_text_run(bytes, p, strict, &mut tb)?;
+                }
                 // Expect `</name>` directly: the name already matched the
                 // validated start tag, so compare bytes instead of re-scanning.
-                if bytes.get(vend + 1) != Some(&b'/') {
-                    return None;
-                }
-                let cs = vend + 2;
+                let cs = p + 2;
                 let name_len = ne - ns;
                 if bytes.get(cs..cs + name_len) != Some(name) {
                     return None;
