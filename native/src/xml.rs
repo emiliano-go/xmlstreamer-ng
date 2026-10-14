@@ -5,8 +5,7 @@
 //! flat insertion-ordered `{path: text}` map, and anything not well formed
 //! invalidates the item alone.
 
-const XML_WHITESPACE: [u8; 4] = [b' ', b'\t', b'\r', b'\n'];
-const NAME_STOP: [u8; 10] = [
+const XML_WHITESPACE: [u8; 4] = [b' ', b'\t', b'\r', b'\n'];const NAME_STOP: [u8; 10] = [
     b' ', b'\t', b'\r', b'\n', b'=', b'/', b'<', b'>', b'"', b'\'',
 ];
 
@@ -26,6 +25,24 @@ static NAME_STOP_LUT: [bool; 256] = build_lut(&NAME_STOP);
 static NAME_START_LUT: [bool; 256] = build_lut(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:");
 static NAME_CHAR_LUT: [bool; 256] =
     build_lut(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:-.0123456789");
+
+/// Bytes that make a text run need precise handling: non-ASCII, CR, the `]`
+/// of a possible `]]>`, and (in strict mode) a forbidden control char.
+const fn build_hazard(strict: bool) -> [bool; 256] {
+    let mut t = [false; 256];
+    let mut b = 0usize;
+    while b < 256 {
+        let c = b as u8;
+        t[b] = c >= 0x80
+            || c == b'\r'
+            || c == b']'
+            || (strict && c < 0x20 && c != b'\t' && c != b'\n');
+        b += 1;
+    }
+    t
+}
+static HAZARD_STRICT: [bool; 256] = build_hazard(true);
+static HAZARD_FAST: [bool; 256] = build_hazard(false);
 
 #[inline]
 fn is_xml_ws(b: u8) -> bool {
@@ -121,11 +138,16 @@ fn has_forbidden_char(s: &str) -> bool {
     let bytes = s.as_bytes();
     // ASCII fast path: forbidden means a C0 control other than tab/LF/CR.
     if bytes.iter().all(|b| *b < 0x80) {
-        return bytes
-            .iter()
-            .any(|&b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r');
+        return has_forbidden_ascii(bytes);
     }
     s.chars().any(|c| !is_xml_char(c as i64))
+}
+
+/// ASCII C0 controls other than tab/LF/CR are forbidden in XML content.
+#[inline]
+fn has_forbidden_ascii(raw: &[u8]) -> bool {
+    raw.iter()
+        .any(|&b| b < 0x20 && b != b'\t' && b != b'\n' && b != b'\r')
 }
 
 /// An attribute value is utf-8, holds no "<", carries only characters XML
@@ -928,6 +950,9 @@ pub struct Scratch {
     /// collisions, mirroring the streaming parser's collision log. Left empty
     /// on the columnar path, drained by the streaming tokenizer.
     pub collisions: Vec<(String, String, String)>,
+    /// Field-name hashes seen so far by the flat fast path (duplicate names
+    /// need numbering, which the fast path does not do).
+    flat_hashes: Vec<u64>,
 }
 
 struct FlatFrame {
@@ -1164,15 +1189,14 @@ fn nested_path(
 /// Whether a run contains the CDATA-close sequence `]]>`.
 #[inline]
 fn has_cdata_close(raw: &[u8]) -> bool {
-    if raw.len() >= 16 {
-        return memchr::memmem::find(raw, b"]]>").is_some();
-    }
+    // `]` is rare in text: SIMD-scan for it and check the next two bytes,
+    // rather than running a generic substring search over every run.
     if raw.len() < 3 {
         return false;
     }
-    // Short run: look for the rare ']' instead of sliding a 3-byte window.
+    let last = raw.len() - 2;
     let mut i = 0;
-    while let Some(r) = memchr::memchr(b']', &raw[i..raw.len() - 2]) {
+    while let Some(r) = memchr::memchr(b']', &raw[i..last]) {
         let p = i + r;
         if raw[p + 1] == b']' && raw[p + 2] == b'>' {
             return true;
@@ -1205,26 +1229,23 @@ fn read_text_run(
         let start = i;
         i = end;
         let raw = &content[start..end];
+        // Single hazard scan (256-entry LUT): anything that needs precise
+        // handling. Printable ASCII without `]` takes this one lookup pass,
+        // with no `]]>` lookup and no UTF-8 re-check.
+        let lut = if strict { &HAZARD_STRICT } else { &HAZARD_FAST };
+        let hazard = raw.iter().any(|&b| lut[b as usize]);
+        if !hazard {
+            target.push_run(content, start, end);
+            continue;
+        }
         // `]]>` in character data is an error in every mode, as before.
         if has_cdata_close(raw) {
             return None;
         }
-        // Single classification pass: pure ASCII needs no UTF-8 re-validation
-        // (ASCII is a subset), no CR normalization and no replacement; strict
-        // mode's control-character rule is checked in the same walk.
-        let mut non_ascii = false;
-        let mut has_cr = false;
-        let mut ctrl = false;
-        for &b in raw {
-            if b >= 0x80 {
-                non_ascii = true;
-            } else if b == b'\r' {
-                has_cr = true;
-            } else if b < 0x20 && b != b'\t' && b != b'\n' {
-                ctrl = true;
-            }
-        }
-        if !non_ascii && !has_cr && !(strict && ctrl) {
+        if raw.is_ascii()
+            && memchr::memchr(b'\r', raw).is_none()
+            && !(strict && has_forbidden_ascii(raw))
+        {
             target.push_run(content, start, end);
             continue;
         }
@@ -1329,6 +1350,179 @@ pub enum Fused {
     Malformed,
 }
 
+/// Fast path for the common "flat item" shape:
+/// `<f1>v1</f1><f2>v2</f2>…</item>`, with no attributes, no self-closing or
+/// nested children, no markup sections, and no duplicate field names.
+///
+/// Returns `Some(Fused::Complete { resume })` after emitting the row, or
+/// `None` when the item is outside that shape — the caller then runs the
+/// general parser, which stays the reference implementation. Nothing is
+/// emitted until the whole item is confirmed simple, so a fallback has no
+/// side effects.
+#[allow(clippy::too_many_arguments)]
+fn try_flat_item<E: FlatEmitter>(
+    scratch: &mut Scratch,
+    bytes: &[u8],
+    start: usize,
+    sep: &str,
+    keep: Option<&std::collections::HashSet<String>>,
+    strict: bool,
+    emitter: &mut E,
+) -> Option<Fused> {
+    let n = bytes.len();
+    let sep_bytes = sep.as_bytes();
+    scratch.pending.clear();
+    scratch.flat_hashes.clear();
+    let mut i = start;
+    let mut seen_child = false;
+    loop {
+        if i >= n {
+            return None; // trailing partial item: let the general path decide
+        }
+        if bytes[i] != b'<' {
+            // Text directly under the item element must be whitespace only.
+            let mut tb = TextBuf::default();
+            let next = read_text_run(bytes, i, strict, &mut tb)?;
+            if !pending_trim_is_empty(&tb.into_pending(), bytes) {
+                return None;
+            }
+            i = next;
+            continue;
+        }
+        match bytes.get(i + 1) {
+            Some(b'/') => {
+                // Closing tag must be exactly `</sep>`.
+                let (cn, cend) = simple_end_tag(bytes, i, n)?;
+                if &bytes[cn.0..cn.1] != sep_bytes {
+                    return None;
+                }
+                if scratch.pending.is_empty() {
+                    // No fields: an item with no child elements yields no row,
+                    // but one whose children were all projected out does.
+                    if seen_child {
+                        emitter.row_start();
+                        emitter.row_end();
+                    }
+                    return Some(Fused::Complete { resume: cend });
+                }
+                if scratch.pending.len() == 1 {
+                    // A single empty field named like the separator is the
+                    // empty-item case: no row (mirrors finish_item).
+                    let p = &scratch.pending[0];
+                    if let KeySrc::Content(ns, ne) = p.key {
+                        if &bytes[ns..ne] == sep_bytes
+                            && pending_trim_is_empty(&p.value, bytes)
+                        {
+                            return Some(Fused::Complete { resume: cend });
+                        }
+                    }
+                }
+                emitter.row_start();
+                for p in scratch.pending.iter() {
+                    let KeySrc::Content(ns, ne) = p.key else {
+                        return None;
+                    };
+                    // SAFETY: name bytes were validated as an XML name.
+                    let name = unsafe { std::str::from_utf8_unchecked(&bytes[ns..ne]) };
+                    emitter.field(name, pending_str(&p.value, bytes).trim_end_matches('\n'));
+                }
+                emitter.row_end();
+                return Some(Fused::Complete { resume: cend });
+            }
+            Some(b'!') | Some(b'?') => return None,
+            Some(_) => {
+                // Start tag must be exactly `<name>` (no attributes, no self close).
+                let (ns, ne, after) = simple_start_tag(bytes, i, n)?;
+                let name = &bytes[ns..ne];
+                seen_child = true;
+                let h = key_hash(KeySrc::Content(ns, ne), bytes, "");
+                if scratch.flat_hashes.contains(&h) {
+                    return None; // duplicate field name needs sibling numbering
+                }
+                scratch.flat_hashes.push(h);
+                if let Some(keep) = keep {
+                    // SAFETY: validated XML name.
+                    let namestr = unsafe { std::str::from_utf8_unchecked(name) };
+                    if !subtree_wanted(keep, namestr) {
+                        i = skip_subtree_checked(bytes, after, name, strict)?;
+                        continue;
+                    }
+                }
+                let mut tb = TextBuf::default();
+                let vend = read_text_run(bytes, after, strict, &mut tb)?;
+                // Expect `</name>` directly: the name already matched the
+                // validated start tag, so compare bytes instead of re-scanning.
+                if bytes.get(vend + 1) != Some(&b'/') {
+                    return None;
+                }
+                let cs = vend + 2;
+                let name_len = ne - ns;
+                if bytes.get(cs..cs + name_len) != Some(name) {
+                    return None;
+                }
+                let mut j = cs + name_len;
+                while j < n && is_xml_ws(bytes[j]) {
+                    j += 1;
+                }
+                if bytes.get(j) != Some(&b'>') {
+                    return None;
+                }
+                scratch.pending.push(FlatPending {
+                    key: KeySrc::Content(ns, ne),
+                    value: tb.into_pending(),
+                });
+                i = j + 1;
+            }
+            None => return None,
+        }
+    }
+}
+
+/// `<name>` with no attributes and not self-closing. Returns
+/// (name start, name end, index just past `>`).
+///
+/// Single pass: validates the name as it scans (ASCII fast path), instead of
+/// `name_end`'s scan-then-revalidate. Names with non-ASCII bytes fall back to
+/// the general parser.
+#[inline]
+fn simple_start_tag(bytes: &[u8], i: usize, n: usize) -> Option<(usize, usize, usize)> {
+    let nm = i + 1;
+    if nm >= n || !NAME_START_LUT[bytes[nm] as usize] {
+        return None;
+    }
+    let mut pos = nm + 1;
+    while pos < n && NAME_CHAR_LUT[bytes[pos] as usize] {
+        pos += 1;
+    }
+    if bytes.get(pos) != Some(&b'>') {
+        return None; // attributes, self-closing, whitespace, or malformed
+    }
+    Some((nm, pos, pos + 1))
+}
+
+/// `</name>` with optional trailing whitespace before `>`. Returns
+/// ((name start, name end), index just past `>`).
+#[inline]
+fn simple_end_tag(bytes: &[u8], i: usize, n: usize) -> Option<((usize, usize), usize)> {
+    if bytes.get(i + 1) != Some(&b'/') {
+        return None;
+    }
+    let nm = i + 2;
+    let e = name_end(bytes, nm, n);
+    if e == -1 {
+        return None;
+    }
+    let e = e as usize;
+    let mut j = e;
+    while j < n && is_xml_ws(bytes[j]) {
+        j += 1;
+    }
+    if bytes.get(j) != Some(&b'>') {
+        return None;
+    }
+    Some(((nm, e), j + 1))
+}
+
 /// Parse one item starting just past its opening separator tag, emitting a row
 /// for it, and return where scanning resumes.
 ///
@@ -1347,6 +1541,9 @@ pub fn parse_item_fused<E: FlatEmitter>(
     emitter: &mut E,
     malformed_close: &mut u64,
 ) -> Fused {
+    if let Some(fused) = try_flat_item(scratch, bytes, start, sep, keep, strict, emitter) {
+        return fused;
+    }
     scratch.stack.clear();
     scratch.pending.clear();
     scratch.appearances.clear();

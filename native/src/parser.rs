@@ -190,30 +190,38 @@ impl<S: ColumnarSink + ?Sized> FlatEmitter for RowEmitter<'_, S> {
             self.ordinal += 1;
             return;
         }
-        let value = if self.types.is_empty() {
-            // No declared field_types: the common case, and `HashMap::get`
-            // would hash the name for nothing.
-            Value::Str(Cow::Borrowed(value))
-        } else {
-            match self.types.get(name) {
-                Some(kind) => typed_value(*kind, value),
-                None => Value::Str(Cow::Borrowed(value)),
-            }
-        };
         let matched = self
             .sink
             .expect_slot(self.ordinal)
             .map(|(slot, expected)| (slot, name.as_bytes() == expected));
         match matched {
             Some((slot, true)) => {
-                self.sink.put_field_at(slot, value);
+                if self.types.is_empty() {
+                    // No declared types: a plain string. Push it without
+                    // building a `Value` (the common case).
+                    self.sink.put_str_at(slot, value);
+                } else {
+                    let v = match self.types.get(name) {
+                        Some(kind) => typed_value(*kind, value),
+                        None => Value::Str(Cow::Borrowed(value)),
+                    };
+                    self.sink.put_field_at(slot, v);
+                }
             }
             Some((_, false)) => {
                 self.sink.layout_broken(self.ordinal);
-                self.sink.put_field(name, value);
+                let v = match self.types.get(name) {
+                    Some(kind) => typed_value(*kind, value),
+                    None => Value::Str(Cow::Borrowed(value)),
+                };
+                self.sink.put_field(name, v);
             }
             None => {
-                self.sink.put_field(name, value);
+                let v = match self.types.get(name) {
+                    Some(kind) => typed_value(*kind, value),
+                    None => Value::Str(Cow::Borrowed(value)),
+                };
+                self.sink.put_field(name, v);
             }
         }
         self.ordinal += 1;
