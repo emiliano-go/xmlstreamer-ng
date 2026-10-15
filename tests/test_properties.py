@@ -287,3 +287,58 @@ def test_separator_attributes_never_change_the_items(items, attr, chunk):
         for f in items
     ) + b"</feed>"
     assert emitted(decorated, chunk=chunk) == emitted(plain, chunk=chunk)
+
+
+# CDATA fields: the fast path must agree with the legacy parser on the same
+# bytes. Every item shares one tag set, so the columnar union schema and the
+# per-item dicts describe the same rows (a per-item dict has no null columns).
+
+
+@settings(max_examples=80, deadline=None)
+@given(
+    tags=st.lists(TAGS, unique=True, min_size=1, max_size=5),
+    rows=st.lists(
+        st.lists(VALUES, min_size=5, max_size=5), min_size=1, max_size=4
+    ),
+)
+def test_cdata_items_match_legacy(tags, rows):
+    import os
+    import tempfile
+
+    from xmlstreamer_ng import _xmlstreamer
+
+    body = b""
+    expected = []
+    for values in rows:
+        inner = b"".join(
+            f"<{tag}><![CDATA[{values[j]}]]></{tag}>".encode()
+            for j, tag in enumerate(tags)
+        )
+        body += b"<item>" + inner + b"</item>"
+        expected.append({tag: values[j] for j, tag in enumerate(tags)})
+
+    feed = b"<feed>" + body + b"</feed>"
+    with tempfile.NamedTemporaryFile(suffix=".xml", delete=False) as handle:
+        handle.write(feed)
+        path = handle.name
+    try:
+        columnar = _xmlstreamer.read_xml(path, separator_tag="item").to_pylist()
+    finally:
+        os.unlink(path)
+    assert columnar == expected
+
+
+@settings(max_examples=200, deadline=None)
+@given(name=st.text(max_size=12))
+def test_separator_validation_matches_name_rules(name):
+    from xmlstreamer_ng import Tokenizer, is_valid_xml_name
+
+    valid = is_valid_xml_name(name)
+    try:
+        Tokenizer(
+            feed_generator=chunked(b"", 64), separator_tag=name, buffer_size=64
+        )
+    except ValueError:
+        assert not valid
+    else:
+        assert valid
