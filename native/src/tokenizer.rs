@@ -145,8 +145,7 @@ impl Engine {
     ) -> Self {
         let deadline = deadline_secs.and_then(|s| {
             let secs = if s.is_nan() { 0.0 } else { s.clamp(0.0, 1.0e9) };
-            std::time::Instant::now()
-                .checked_add(std::time::Duration::from_secs_f64(secs))
+            std::time::Instant::now().checked_add(std::time::Duration::from_secs_f64(secs))
         });
         Engine {
             sep: separator_tag.as_bytes().to_vec(),
@@ -198,7 +197,6 @@ impl Engine {
     pub fn malformed_tags(&self) -> usize {
         self.malformed_tags
     }
-
 
     pub fn take_logs(&mut self) -> Vec<Log> {
         std::mem::take(&mut self.logs)
@@ -303,13 +301,8 @@ impl Engine {
                                 return Flow::Continue;
                             }
                             let replaced = std::str::from_utf8(&content).is_err();
-                            let collisions =
-                                std::mem::take(&mut self.scratch.collisions);
-                            (
-                                Some(collector.fields),
-                                replaced,
-                                collisions,
-                            )
+                            let collisions = std::mem::take(&mut self.scratch.collisions);
+                            (Some(collector.fields), replaced, collisions)
                         }
                         _ => parse_wrapped(&content, &self.sep),
                     };
@@ -361,12 +354,10 @@ impl Engine {
             self.scan = self.scan.saturating_sub(self.pos);
             self.tag_scan = self.tag_scan.saturating_sub(self.pos);
             if self.section_open_at >= 0 {
-                self.section_open_at =
-                    (self.section_open_at - self.pos as i64).max(0);
+                self.section_open_at = (self.section_open_at - self.pos as i64).max(0);
             }
             if self.tag_open_at >= 0 {
-                self.tag_open_at =
-                    (self.tag_open_at - self.pos as i64).max(0);
+                self.tag_open_at = (self.tag_open_at - self.pos as i64).max(0);
             }
             self.pos = 0;
         }
@@ -434,9 +425,7 @@ impl Engine {
                 if end == -1 {
                     if (self.buffer.len() as i64) < window {
                         if !self.section_is_doctype {
-                            let keep = self.buffer.len() as i64
-                                - terminator.len() as i64
-                                + 1;
+                            let keep = self.buffer.len() as i64 - terminator.len() as i64 + 1;
                             if keep > self.scan as i64 {
                                 self.scan = keep as usize;
                             }
@@ -446,12 +435,9 @@ impl Engine {
                     if self.section_given_up {
                         return None;
                     }
-                    let open_at = (self.section_open_at.max(0) as usize)
-                        .min(self.buffer.len());
+                    let open_at = (self.section_open_at.max(0) as usize).min(self.buffer.len());
                     self.logs.push(Log::Unterminated {
-                        opener: self.buffer
-                            [open_at..(open_at + 9).min(self.buffer.len())]
-                            .to_vec(),
+                        opener: self.buffer[open_at..(open_at + 9).min(self.buffer.len())].to_vec(),
                         limit: self.section_limit,
                         markup: !self.on_limit_text,
                     });
@@ -498,8 +484,7 @@ impl Engine {
                     is_doctype,
                 } => {
                     if !is_doctype {
-                        let stop =
-                            std::cmp::min(opener + limit, self.buffer.len() as i64);
+                        let stop = std::cmp::min(opener + limit, self.buffer.len() as i64);
                         let end = find(
                             &self.buffer,
                             terminator,
@@ -653,8 +638,7 @@ impl Engine {
                             } else if self.buffer[idx..].starts_with(b"<?") {
                                 self.dtd_inner = b"?>".to_vec();
                                 pos = idx + 2;
-                            } else if stop - idx < 4
-                                && b"<!--".starts_with(&self.buffer[idx..stop])
+                            } else if stop - idx < 4 && b"<!--".starts_with(&self.buffer[idx..stop])
                             {
                                 self.scan = idx;
                                 return -1;
@@ -741,8 +725,7 @@ impl Engine {
                     self.sep.starts_with(rest)
                         || (rest.len() > self.sep.len()
                             && rest.starts_with(&self.sep)
-                            && (rest[self.sep.len()] == b'>'
-                                || is_ws(rest[self.sep.len()])))
+                            && (rest[self.sep.len()] == b'>' || is_ws(rest[self.sep.len()])))
                 }
                 None => false,
             };
@@ -784,12 +767,9 @@ impl Engine {
         if self.section.is_none() || self.timed_out {
             return;
         }
-        let open_at = (self.section_open_at.max(0) as usize)
-            .min(self.buffer.len());
+        let open_at = (self.section_open_at.max(0) as usize).min(self.buffer.len());
         self.logs.push(Log::SectionEof {
-            opener: self.buffer
-                [open_at..(open_at + 9).min(self.buffer.len())]
-                .to_vec(),
+            opener: self.buffer[open_at..(open_at + 9).min(self.buffer.len())].to_vec(),
             discarded: self.buffer.len() - open_at,
         });
     }
@@ -815,14 +795,15 @@ fn has_nested_separator(content: &[u8], sep: &[u8]) -> bool {
     false
 }
 
-fn parse_wrapped(
-    content: &[u8],
-    sep: &[u8],
-) -> (
+/// `(parsed fields, text was replaced, collisions)`, where a collision is
+/// `(path, first occurrence, second occurrence)` reported by the fallback.
+type WrappedParse = (
     Option<Vec<(String, String)>>,
     bool,
     Vec<(String, String, String)>,
-) {
+);
+
+fn parse_wrapped(content: &[u8], sep: &[u8]) -> WrappedParse {
     let mut doc = Vec::with_capacity(content.len() + 2 * sep.len() + 5);
     doc.push(b'<');
     doc.extend_from_slice(sep);
@@ -942,10 +923,7 @@ fn find_close_tag(buf: &[u8], from: usize, sep: &[u8]) -> Option<TagMatch> {
     while i < n {
         let lt = memchr::memchr(b'<', &buf[i..])?;
         let p = i + lt;
-        if p + 2 + sep.len() <= n
-            && buf[p + 1] == b'/'
-            && &buf[p + 2..p + 2 + sep.len()] == sep
-        {
+        if p + 2 + sep.len() <= n && buf[p + 1] == b'/' && &buf[p + 2..p + 2 + sep.len()] == sep {
             let q = p + 2 + sep.len();
             match buf.get(q) {
                 Some(b'>') => {

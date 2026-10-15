@@ -219,9 +219,7 @@ pub fn find_close_sep_ex(
             }
             Section::No => {}
         }
-        if p + 2 + sep.len() <= n
-            && bytes[p + 1] == b'/'
-            && &bytes[p + 2..p + 2 + sep.len()] == sep
+        if p + 2 + sep.len() <= n && bytes[p + 1] == b'/' && &bytes[p + 2..p + 2 + sep.len()] == sep
         {
             let q = p + 2 + sep.len();
             if let Some(gt) = rypipe_core::scan::find(bytes, q, b'>') {
@@ -262,8 +260,10 @@ pub fn skip_element(bytes: &[u8], after_open: usize, tag: &[u8]) -> Option<usize
             let q = p + 2;
             if q + tag.len() <= n && &bytes[q..q + tag.len()] == tag {
                 let z = q + tag.len();
-                if matches!(bytes.get(z), Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r'))
-                {
+                if matches!(
+                    bytes.get(z),
+                    Some(b'>') | Some(b' ') | Some(b'\t') | Some(b'\n') | Some(b'\r')
+                ) {
                     depth -= 1;
                     let end = find_tag_end(bytes, p + 1)?;
                     if depth == 0 {

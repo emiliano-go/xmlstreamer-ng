@@ -76,12 +76,13 @@ fn plan_is_identity(plan: &ExecutionPlan) -> bool {
         && plan.filter.is_none()
 }
 
+/// `(flat dict or None, collisions)`, where a collision is
+/// `(path, first occurrence, second occurrence)`.
+type ParseDocumentResult = (Option<Py<PyDict>>, Vec<(String, String, String)>);
+
 /// Parse a whole item document into `(flat_dict_or_None, collisions)`.
 #[pyfunction]
-fn parse_document(
-    py: Python<'_>,
-    doc: &[u8],
-) -> PyResult<(Option<Py<PyDict>>, Vec<(String, String, String)>)> {
+fn parse_document(py: Python<'_>, doc: &[u8]) -> PyResult<ParseDocumentResult> {
     let result = xml::parse_document(doc);
     let parsed = match result.parsed {
         Some(tags) => {
@@ -222,12 +223,14 @@ fn last_read_diagnostics(py: Python<'_>) -> Option<Bound<'_, PyDict>> {
     let snap = guard.as_ref()?;
     let dict = PyDict::new(py);
     dict.set_item("path", &snap.path).ok()?;
-    dict.set_item("malformed_items", snap.malformed_items).ok()?;
+    dict.set_item("malformed_items", snap.malformed_items)
+        .ok()?;
     dict.set_item("malformed_closing_tags", snap.malformed_closing_tags)
         .ok()?;
     dict.set_item("unterminated_sections", snap.unterminated_sections)
         .ok()?;
-    dict.set_item("discarded_bytes", snap.discarded_bytes).ok()?;
+    dict.set_item("discarded_bytes", snap.discarded_bytes)
+        .ok()?;
     Some(dict)
 }
 
@@ -290,9 +293,8 @@ impl RecordStream {
     /// Drain the warnings the scan produced since the last call.
     fn take_logs<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyList>> {
         let list = PyList::empty(py);
-        let events = std::mem::take(
-            &mut *self.diag.events.lock().unwrap_or_else(|e| e.into_inner()),
-        );
+        let events =
+            std::mem::take(&mut *self.diag.events.lock().unwrap_or_else(|e| e.into_inner()));
         for (code, message) in events {
             list.append((code, message))?;
         }
@@ -585,12 +587,7 @@ impl ParallelBatches {
     fn __next__(&self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
         // The worker parses on other threads; release the GIL while waiting.
         let inner = Arc::clone(&self.inner);
-        let next = py.detach(move || {
-            inner
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .next()
-        });
+        let next = py.detach(move || inner.lock().unwrap_or_else(|e| e.into_inner()).next());
         match next {
             None => {
                 if !self
@@ -601,9 +598,7 @@ impl ParallelBatches {
                 }
                 Ok(None)
             }
-            Some(Ok(batch)) => {
-                Ok(Some(record_batch_to_pyarrow(py, &batch)?.unbind()))
-            }
+            Some(Ok(batch)) => Ok(Some(record_batch_to_pyarrow(py, &batch)?.unbind())),
             Some(Err(err)) => Err(py_err_from_rypipe(err)),
         }
     }

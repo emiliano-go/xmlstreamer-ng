@@ -5,9 +5,8 @@
 //! flat insertion-ordered `{path: text}` map, and anything not well formed
 //! invalidates the item alone.
 
-const XML_WHITESPACE: [u8; 4] = [b' ', b'\t', b'\r', b'\n'];const NAME_STOP: [u8; 10] = [
-    b' ', b'\t', b'\r', b'\n', b'=', b'/', b'<', b'>', b'"', b'\'',
-];
+const XML_WHITESPACE: [u8; 4] = *b" \t\r\n";
+const NAME_STOP: [u8; 10] = *b" \t\r\n=/<>\"'";
 
 // 256-entry lookup tables: the per-byte `slice.contains` scans these arrays
 // linearly on every name/whitespace byte; a table lookup is a single load.
@@ -22,7 +21,8 @@ const fn build_lut(bytes: &[u8]) -> [bool; 256] {
 }
 static XML_WS_LUT: [bool; 256] = build_lut(&XML_WHITESPACE);
 static NAME_STOP_LUT: [bool; 256] = build_lut(&NAME_STOP);
-static NAME_START_LUT: [bool; 256] = build_lut(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:");
+static NAME_START_LUT: [bool; 256] =
+    build_lut(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:");
 static NAME_CHAR_LUT: [bool; 256] =
     build_lut(b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz_:-.0123456789");
 
@@ -75,7 +75,9 @@ fn is_name_stop(b: u8) -> bool {
 // ---------------------------------------------------------------------------
 
 fn is_name_start_char(c: char) -> bool {
-    c == ':' || c == '_' || c.is_ascii_alphabetic()
+    c == ':'
+        || c == '_'
+        || c.is_ascii_alphabetic()
         || ('\u{00C0}'..='\u{00D6}').contains(&c)
         || ('\u{00D8}'..='\u{00F6}').contains(&c)
         || ('\u{00F8}'..='\u{02FF}').contains(&c)
@@ -194,12 +196,12 @@ pub fn attvalue_is_well_formed(value: &[u8]) -> bool {
             None => return false,
         };
         let body = &text[amp + 1..semi];
-        if body.starts_with("#x") {
-            if !is_xml_char(char_ref_code(&body[2..], 16)) {
+        if let Some(digits) = body.strip_prefix("#x") {
+            if !is_xml_char(char_ref_code(digits, 16)) {
                 return false;
             }
-        } else if body.starts_with('#') {
-            if !is_xml_char(char_ref_code(&body[1..], 10)) {
+        } else if let Some(digits) = body.strip_prefix('#') {
+            if !is_xml_char(char_ref_code(digits, 10)) {
                 return false;
             }
         } else if !matches!(body, "amp" | "lt" | "gt" | "quot" | "apos") {
@@ -358,9 +360,9 @@ pub fn start_tag_checked_name(tag: &[u8]) -> Option<(usize, usize)> {
         if quote != b'"' && quote != b'\'' {
             return None;
         }
-        let close = match memchr::memchr(quote, &tag[idx + 1..end]) {
-            Some(r) => idx + 1 + r,
-            None => return None,
+        let close = {
+            let r = memchr::memchr(quote, &tag[idx + 1..end])?;
+            idx + 1 + r
         };
         if !attvalue_is_well_formed(&tag[idx + 1..close]) {
             return None;
@@ -373,8 +375,7 @@ pub fn start_tag_checked_name(tag: &[u8]) -> Option<(usize, usize)> {
 /// Strict-validate an end tag and return its name span `(start, end)` in
 /// one pass. `tag` includes `</` and `>`.
 pub fn end_tag_checked_name(tag: &[u8]) -> Option<(usize, usize)> {
-    if tag.len() < 3 || tag[0] != b'<' || tag[1] != b'/' || tag[tag.len() - 1] != b'>'
-    {
+    if tag.len() < 3 || tag[0] != b'<' || tag[1] != b'/' || tag[tag.len() - 1] != b'>' {
         return None;
     }
     let end = tag.len() - 1;
@@ -394,8 +395,7 @@ pub fn end_tag_checked_name(tag: &[u8]) -> Option<(usize, usize)> {
 
 /// An end tag carries a name, optional whitespace, and nothing else.
 pub fn end_tag_is_well_formed(tag: &[u8]) -> bool {
-    if tag.len() < 3 || tag[0] != b'<' || tag[1] != b'/' || tag[tag.len() - 1] != b'>'
-    {
+    if tag.len() < 3 || tag[0] != b'<' || tag[1] != b'/' || tag[tag.len() - 1] != b'>' {
         return false;
     }
     let end = tag.len() - 1;
@@ -463,8 +463,7 @@ impl Sink {
                     break;
                 }
             }
-            self.collisions
-                .push((taken, tag.to_string(), key.clone()));
+            self.collisions.push((taken, tag.to_string(), key.clone()));
         }
         key
     }
@@ -486,7 +485,11 @@ fn err() -> DocResult {
 pub fn parse_document(doc: &[u8]) -> DocResult {
     let n = doc.len();
     // A leading byte-order mark is not part of the document.
-    let mut i = if doc.starts_with(b"\xef\xbb\xbf") { 3 } else { 0 };
+    let mut i = if doc.starts_with(b"\xef\xbb\xbf") {
+        3
+    } else {
+        0
+    };
     let mut stack: Vec<Frame> = Vec::new();
     let mut sink = Sink::default();
     let mut root_closed = false;
@@ -544,10 +547,7 @@ pub fn parse_document(doc: &[u8]) -> DocResult {
                     if has_forbidden_char(text) {
                         return err();
                     }
-                    push_normalized(
-                        &mut stack.last_mut().unwrap().text,
-                        text,
-                    );
+                    push_normalized(&mut stack.last_mut().unwrap().text, text);
                     i = end + 3;
                     continue;
                 }
@@ -857,10 +857,7 @@ fn closes_separator(tag: &[u8], sep: &[u8], malformed: &mut u64) -> Option<usize
     if !tag.starts_with(b"</") {
         return None;
     }
-    let name = match tag_name_at(tag, 2) {
-        Some(name) => name,
-        None => return None,
-    };
+    let name = tag_name_at(tag, 2)?;
     if name != sep {
         return None;
     }
@@ -920,14 +917,13 @@ fn decode_ref(bytes: &[u8], amp: usize) -> Option<(String, usize)> {
                     return None;
                 }
                 char::from_u32(code as u32)?.to_string()
-            } else if let Some(dec) = text.strip_prefix('#') {
+            } else {
+                let dec = text.strip_prefix('#')?;
                 let code = char_ref_code(dec, 10);
                 if !is_xml_char(code) {
                     return None;
                 }
                 char::from_u32(code as u32)?.to_string()
-            } else {
-                return None; // undefined entity
             }
         }
     };
@@ -1153,9 +1149,7 @@ fn number_key(scratch: &mut Scratch, content: &[u8], path: KeySrc) -> KeySrc {
         let idx = scratch
             .appearances
             .iter()
-            .position(|(h, k, _)| {
-                *h == path_hash && key_eq(*k, path, content, &scratch.key_arena)
-            })
+            .position(|(h, k, _)| *h == path_hash && key_eq(*k, path, content, &scratch.key_arena))
             .unwrap();
         scratch.appearances[idx].2 += 1;
         let count = scratch.appearances[idx].2;
@@ -1181,7 +1175,7 @@ fn subtree_wanted(keep: &std::collections::HashSet<String>, tag: &str) -> bool {
         name == tag
             || name
                 .strip_prefix(tag)
-                .map_or(false, |rest| rest.starts_with('/'))
+                .is_some_and(|rest| rest.starts_with('/'))
     })
 }
 
@@ -1298,14 +1292,13 @@ fn read_text_run(
 /// control, no non-ASCII. Such a run can be borrowed verbatim. Processes eight
 /// bytes at a time (SWAR) instead of one at a time.
 #[inline]
+#[allow(clippy::chunks_exact_to_as_chunks)] // `as_chunks` needs Rust 1.88; MSRV is 1.78
 fn all_printable_ascii(raw: &[u8]) -> bool {
     const LO: u64 = 0x2020_2020_2020_2020;
     const HI: u64 = 0x8080_8080_8080_8080;
     let mut chunks = raw.chunks_exact(8);
     for c in &mut chunks {
-        let w = u64::from_le_bytes([
-            c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7],
-        ]);
+        let w = u64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]);
         // High bit set for any byte (non-ASCII).
         if w & HI != 0 {
             return false;
@@ -1340,7 +1333,11 @@ fn push_cdata(
     }
     // Precise tier: tab/LF, non-ASCII, CR or (strict) controls take the LUT
     // hazard scan, then UTF-8 validation and line-ending normalization.
-    let lut = if strict { &CDATA_HAZARD_STRICT } else { &CDATA_HAZARD };
+    let lut = if strict {
+        &CDATA_HAZARD_STRICT
+    } else {
+        &CDATA_HAZARD
+    };
     if !raw.iter().any(|&b| lut[b as usize]) {
         target.push_run(bytes, start, end);
         return Some(());
@@ -1496,9 +1493,7 @@ fn try_flat_item<E: FlatEmitter>(
                     // empty-item case: no row (mirrors finish_item).
                     let p = &scratch.pending[0];
                     if let KeySrc::Content(ns, ne) = p.key {
-                        if &bytes[ns..ne] == sep_bytes
-                            && pending_trim_is_empty(&p.value, bytes)
-                        {
+                        if &bytes[ns..ne] == sep_bytes && pending_trim_is_empty(&p.value, bytes) {
                             return Some(Fused::Complete { resume: cend });
                         }
                     }
@@ -1783,15 +1778,13 @@ pub fn parse_item_fused<E: FlatEmitter>(
         // kept so later siblings number as before. Strict mode only skips an
         // empty leaf, so no unvalidated content can slip through; fast mode
         // (the caller opted out of validation) skips any leaf.
-        if keep.is_some() && scratch.stack.is_empty() && !self_closing && !emitter.wants(name)
-        {
+        if keep.is_some() && scratch.stack.is_empty() && !self_closing && !emitter.wants(name) {
             let path = KeySrc::Content(tag_span.0, tag_span.1);
             let path_hash = key_hash(path, bytes, &scratch.key_arena);
-            let first = !scratch
-                .appearances
-                .iter()
-                .any(|(h, k, _)| *h == path_hash && key_eq(*k, path, bytes, &scratch.key_arena))
-                && !scratch
+            let first =
+                !scratch.appearances.iter().any(|(h, k, _)| {
+                    *h == path_hash && key_eq(*k, path, bytes, &scratch.key_arena)
+                }) && !scratch
                     .emitted
                     .iter()
                     .any(|(h, k)| *h == path_hash && key_eq(*k, path, bytes, &scratch.key_arena));
@@ -1801,7 +1794,7 @@ pub fn parse_item_fused<E: FlatEmitter>(
                     let tag_bytes = &bytes[tag_span.0..tag_span.1];
                     if (!strict || lt == end)
                         && bytes.get(lt..lt + 2) == Some(b"</")
-                        && after + tag_bytes.len() + 1 <= n
+                        && after + tag_bytes.len() < n
                         && &bytes[after..after + tag_bytes.len()] == tag_bytes
                         && bytes[after + tag_bytes.len()] == b'>'
                     {
@@ -1820,14 +1813,8 @@ pub fn parse_item_fused<E: FlatEmitter>(
         if scratch.stack.is_empty() && !self_closing {
             if let Some(keep) = keep {
                 if !subtree_wanted(keep, name) {
-                    if let Some(after) =
-                        skip_subtree_checked(bytes, end, name.as_bytes(), strict)
-                    {
-                        let _ = number_key(
-                            scratch,
-                            bytes,
-                            KeySrc::Content(tag_span.0, tag_span.1),
-                        );
+                    if let Some(after) = skip_subtree_checked(bytes, end, name.as_bytes(), strict) {
+                        let _ = number_key(scratch, bytes, KeySrc::Content(tag_span.0, tag_span.1));
                         seen_child = true;
                         i = after;
                         continue;
@@ -1909,19 +1896,15 @@ fn finish_item<E: FlatEmitter>(
     }
 
     let Scratch {
-        pending,
-        key_arena,
-        ..
+        pending, key_arena, ..
     } = scratch;
     emitter.row_start();
     for p in pending.iter() {
         let name = match p.key {
-            KeySrc::Content(s, e) => unsafe {
-                std::str::from_utf8_unchecked(&bytes[s..e])
-            },
+            KeySrc::Content(s, e) => unsafe { std::str::from_utf8_unchecked(&bytes[s..e]) },
             KeySrc::Arena(s, e) => &key_arena[s as usize..(s + e) as usize],
         };
-        emitter.field(name, &pending_str(&p.value, bytes).trim_end_matches('\n'));
+        emitter.field(name, pending_str(&p.value, bytes).trim_end_matches('\n'));
     }
     emitter.row_end();
     Fused::Complete { resume }

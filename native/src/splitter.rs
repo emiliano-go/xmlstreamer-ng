@@ -27,12 +27,7 @@ impl XmlSplitter {
     /// lands inside a comment, CDATA, PI, DOCTYPE (however long) or a quoted
     /// attribute value, which the backward `SkipRegionFinder` heuristic
     /// cannot guarantee.
-    fn split_points(
-        &self,
-        bytes: &[u8],
-        max_chunks: usize,
-        min_chunk_bytes: usize,
-    ) -> Vec<usize> {
+    fn split_points(&self, bytes: &[u8], max_chunks: usize, min_chunk_bytes: usize) -> Vec<usize> {
         if max_chunks <= 1 || bytes.is_empty() {
             return vec![0, bytes.len()];
         }

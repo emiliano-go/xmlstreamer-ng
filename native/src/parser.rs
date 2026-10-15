@@ -96,8 +96,7 @@ pub fn keep_set(
     let mut set: HashSet<String> = HashSet::with_capacity(names.len());
     for out_name in names {
         if let Some(mapping) = field_mapping {
-            if let Some((raw, _)) = mapping.iter().find(|(_, renamed)| *renamed == out_name)
-            {
+            if let Some((raw, _)) = mapping.iter().find(|(_, renamed)| *renamed == out_name) {
                 set.insert(raw.clone());
                 continue;
             }
@@ -123,10 +122,7 @@ fn typed_value<'a>(kind: FieldKind, value: &'a str) -> Value<'a> {
             let t = value.trim();
             if t == "1" || t.eq_ignore_ascii_case("true") || t.eq_ignore_ascii_case("yes") {
                 Value::Bool(true)
-            } else if t == "0"
-                || t.eq_ignore_ascii_case("false")
-                || t.eq_ignore_ascii_case("no")
-            {
+            } else if t == "0" || t.eq_ignore_ascii_case("false") || t.eq_ignore_ascii_case("no") {
                 Value::Bool(false)
             } else {
                 Value::Str(Cow::Borrowed(value))
@@ -360,9 +356,7 @@ impl XmlParser {
                         }
                         None => {
                             if close_unterminated {
-                                stats
-                                    .unterminated_sections
-                                    .fetch_add(1, Ordering::Relaxed);
+                                stats.unterminated_sections.fetch_add(1, Ordering::Relaxed);
                                 stats
                                     .discarded_bytes
                                     .fetch_add((bytes.len() - start) as u64, Ordering::Relaxed);

@@ -150,16 +150,13 @@ impl StreamingRecordParser for XmlStreamParser {
         if eof {
             self.engine.finish();
         }
-        loop {
-            match self.engine.next_item() {
-                Next::Item(item) => emit(StreamRecord {
-                    content: item.content,
-                    parsed: item.parsed,
-                    replaced: item.replaced,
-                    collisions: item.collisions,
-                }),
-                Next::NeedMore | Next::Eof => break,
-            }
+        while let Next::Item(item) = self.engine.next_item() {
+            emit(StreamRecord {
+                content: item.content,
+                parsed: item.parsed,
+                replaced: item.replaced,
+                collisions: item.collisions,
+            });
         }
         for log in self.engine.take_logs() {
             report(log, diag);
