@@ -294,6 +294,23 @@ about 1.3x quick-xml's raw parse speed while also building the Arrow
 table; `read_xml_par` (chunks=2-8) exceeds every single-threaded native
 counter in MB/s.
 
+**Optional profile-guided build.** `native/build_pgo.sh` builds a two-stage
+profile-guided release (the default wheel is unchanged); its trainer exercises
+the columnar, streaming, parallel and per-item paths. On the same machine and
+feed the PGO build lifts every path:
+
+| path | default | PGO |
+|---|---|---|
+| per-item (items/s) | 545k | 658k |
+| XmlSource columnar (MB/s) | 481 | 675 |
+| XmlSource parallel, 8 threads (MB/s) | 1704 | 2483 |
+| XmlSource bounded parallel streaming (MB/s) | 1420 | 1947 |
+
+On the dedicated quick-xml head-to-head the PGO build reaches ~1.5x to ~1.6x on
+the flat feed and ~1.25x to ~1.35x on CDATA-heavy feeds, across both `read_xml`
+and `read_xml_stream`. Regenerate with:
+`native/build_pgo.sh .venv/bin/python benchmarks/pgo_train.py --mb 8`.
+
 **Peak memory.** Each parser processes the same 121 MB feed alone, in a fresh
 subprocess, and reports its peak RSS - measured by the kernel, not estimated.
 

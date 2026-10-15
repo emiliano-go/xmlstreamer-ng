@@ -150,6 +150,19 @@ single-threaded `read_xml` runs at about 1.3x quick-xml's parse speed,
 while `read_xml_par` (chunks=2-8) exceeds every single-threaded native
 counter in MB/s.
 
+### Optional profile-guided build
+
+`native/build_pgo.sh` builds a two-stage profile-guided release (the default
+wheel is unchanged); its trainer covers the columnar, streaming, parallel and
+per-item paths. On this machine, default vs PGO:
+
+| path | default | PGO |
+|---|---|---|
+| per-item (items/s) | 545k | 658k |
+| XmlSource columnar (MB/s) | 481 | 675 |
+| XmlSource parallel, 8 threads (MB/s) | 1704 | 2483 |
+| XmlSource bounded parallel streaming (MB/s) | 1420 | 1947 |
+
 ### Speed (parse-only, same in-memory bytes, best of N)
 
 | feed | parser | items | seconds | items/s |
