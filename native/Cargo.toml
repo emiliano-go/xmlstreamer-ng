@@ -10,16 +10,22 @@ exclude = [".cargo"]
 
 [lib]
 name = "_xmlstreamer"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "lib"]
+
+[features]
+# The pyo3 bindings are on by default (the wheel). The `lib`-only parser
+# surface is used by the fuzz targets, which build with `--no-default-features`.
+default = ["python"]
+python = ["dep:pyo3", "pyo3/extension-module"]
 
 [dependencies]
-pyo3 = { version = "0.29", features = ["extension-module", "abi3-py310"] }
+pyo3 = { version = "=0.29.2", features = ["abi3-py310"], optional = true }
 # Both crates come from crates.io so the crate stays publishable: published
 # rypipe-python depends on rypipe-core by version, so a single copy of
 # rypipe-core is compiled and the Splitter/RecordParser traits unify.
-rypipe-core = { version = "0.6.0", features = ["mmap", "compress-all", "streaming-parser", "mimalloc"] }
-rypipe_python = { package = "rypipe-python", version = "0.6.0" }
-memchr = "2"
+rypipe-core = { version = "=0.6.0", features = ["mmap", "compress-all", "streaming-parser", "mimalloc"] }
+rypipe_python = { package = "rypipe-python", version = "=0.6.0" }
+memchr = "=2.8.3"
 
 [profile.release]
 opt-level = 3

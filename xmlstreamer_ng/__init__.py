@@ -1193,6 +1193,8 @@ class Tokenizer:
         buffer_size: int,
         sections: Sections | None = None,
         deadline: float | None = None,
+        max_bytes: int | None = None,
+        max_items: int | None = None,
     ) -> None:
         if not isinstance(feed_generator, collections.abc.Generator):
             raise TypeError("feed_generator must be a generator")
@@ -1233,6 +1235,8 @@ class Tokenizer:
             sections.max_size,
             sections.on_limit == "text",
             remaining,
+            max_bytes,
+            max_items,
         )
         self.PARSING_STATE = ParsingState.SEEK_OPEN
         self.actual_item: ParsedItem = ParsedItem()
@@ -1489,6 +1493,8 @@ class StreamInterpreter(Generic[ItemT]):
         output: Nested | None = None,
         transport: Transport | None = None,
         sections: Sections | None = None,
+        max_bytes: int | None = None,
+        max_items: int | None = None,
         source: SourceT | None = None,
             ) -> None: ...
 
@@ -1503,6 +1509,8 @@ class StreamInterpreter(Generic[ItemT]):
         output: Raw = ...,
         transport: Transport | None = None,
         sections: Sections | None = None,
+        max_bytes: int | None = None,
+        max_items: int | None = None,
         source: SourceT | None = None,
             ) -> None: ...
 
@@ -1516,6 +1524,8 @@ class StreamInterpreter(Generic[ItemT]):
         output: Nested | Raw | None = None,
         transport: Transport | None = None,
         sections: Sections | None = None,
+        max_bytes: int | None = None,
+        max_items: int | None = None,
         source: SourceT | None = None,
             ) -> None:
         # Every argument is checked here, at the call site, so a bad
@@ -1598,12 +1608,24 @@ class StreamInterpreter(Generic[ItemT]):
                 "item_filter must be a callable taking the flat item "
                 "dict and returning a truthy value to keep it, or None."
             )
+        for _name, _value in (("max_bytes", max_bytes), ("max_items", max_items)):
+            if _value is not None:
+                if isinstance(_value, bool) or not isinstance(_value, int):
+                    raise TypeError(
+                        f"{_name} must be a positive int, or None for no cap."
+                    )
+                if _value <= 0:
+                    raise ValueError(
+                        f"{_name} must be positive, or None for no cap."
+                    )
 
         self.BUFFER_SIZE = buffer_size
         self.URL: str | None = url
         self.SOURCE: SourceT | None = source
         self.separator_tag = separator_tag
         self.MAX_RUNNING_TIME = max_running_time
+        self.MAX_BYTES = max_bytes
+        self.MAX_ITEMS = max_items
         self.OUTPUT = output
         self.TRANSPORT = transport if transport is not None else Transport()
         self.SECTIONS = sections if sections is not None else Sections()
@@ -1670,6 +1692,8 @@ class StreamInterpreter(Generic[ItemT]):
             buffer_size=self.BUFFER_SIZE,
             sections=self.SECTIONS,
             deadline=deadline,
+            max_bytes=self.MAX_BYTES,
+            max_items=self.MAX_ITEMS,
         )
         run = FeedRun(self, tokenizer, budget_start, self.MAX_RUNNING_TIME)
         self.last_run = run

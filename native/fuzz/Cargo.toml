@@ -1,0 +1,37 @@
+[package]
+name = "xmlstreamer-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# cargo-fuzz wants its own workspace so it does not join the parent build.
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+# No python feature: only the parser surface links, so pyo3 is absent.
+xmlstreamer-native = { path = "..", default-features = false }
+
+[[bin]]
+name = "fuzz_parse_document"
+path = "fuzz_targets/fuzz_parse_document.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_columnar"
+path = "fuzz_targets/fuzz_columnar.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_tokenizer"
+path = "fuzz_targets/fuzz_tokenizer.rs"
+test = false
+doc = false
+bench = false

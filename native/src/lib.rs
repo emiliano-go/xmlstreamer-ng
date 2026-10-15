@@ -1,13 +1,22 @@
+#![cfg_attr(not(feature = "python"), allow(unused_imports, dead_code))]
+
+// The pyo3 layer keeps all hand-written unsafe in xml.rs; pyo3's own macros
+// expand to unsafe, so this crate root cannot `#![forbid(unsafe_code)]`. The
+// parser/glue modules forbid it individually.
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::{PyAny, PyBytes, PyDict, PyList};
 
 use rypipe_core::{
     ExecutionPlan, MemoryBudget, ParallelStreamOpts, ParallelStreamingBatchIterator,
     ParseDiagnostics, Pipeline, RecordStream as CoreRecordStream, StreamState,
 };
+#[cfg(feature = "python")]
 use rypipe_python::{
     execution_plan_from_kwargs, py_err_from_rypipe, record_batch_to_pyarrow,
     record_batches_to_pyarrow_batches, record_batches_to_pyarrow_table,
@@ -20,12 +29,16 @@ mod stream_parser;
 mod tokenizer;
 mod xml;
 
+/// Non-pyo3 entry points for the fuzz targets (always compiled).
+pub mod fuzz_api;
+
 use parser::XmlParser;
 use splitter::XmlSplitter;
 use stream_parser::{StreamRecord, XmlStreamParser};
 
 /// Reject separator tags the XML name rules cannot allow, at the entry
 /// point, exactly like the Python `Tokenizer` does.
+#[cfg(feature = "python")]
 fn validate_separator_tag(separator_tag: &str) -> PyResult<()> {
     if !xml::is_xml_name(separator_tag.as_bytes()) {
         return Err(pyo3::exceptions::PyValueError::new_err(format!(
@@ -36,6 +49,7 @@ fn validate_separator_tag(separator_tag: &str) -> PyResult<()> {
 }
 
 /// Parse a memory string ("64MiB", "1GB") or an int into bytes.
+#[cfg(feature = "python")]
 fn memory_bytes(value: &Bound<'_, PyAny>) -> PyResult<usize> {
     if let Ok(bytes) = value.extract::<usize>() {
         return Ok(bytes.max(1));
@@ -78,9 +92,11 @@ fn plan_is_identity(plan: &ExecutionPlan) -> bool {
 
 /// `(flat dict or None, collisions)`, where a collision is
 /// `(path, first occurrence, second occurrence)`.
+#[cfg(feature = "python")]
 type ParseDocumentResult = (Option<Py<PyDict>>, Vec<(String, String, String)>);
 
 /// Parse a whole item document into `(flat_dict_or_None, collisions)`.
+#[cfg(feature = "python")]
 #[pyfunction]
 fn parse_document(py: Python<'_>, doc: &[u8]) -> PyResult<ParseDocumentResult> {
     let result = xml::parse_document(doc);
@@ -97,21 +113,25 @@ fn parse_document(py: Python<'_>, doc: &[u8]) -> PyResult<ParseDocumentResult> {
     Ok((parsed, result.collisions))
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn attvalue_is_well_formed(value: &[u8]) -> bool {
     xml::attvalue_is_well_formed(value)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn start_tag_is_well_formed(tag: &[u8]) -> bool {
     xml::start_tag_is_well_formed(tag)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn end_tag_is_well_formed(tag: &[u8]) -> bool {
     xml::end_tag_is_well_formed(tag)
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 fn is_xml_name(raw: &[u8]) -> bool {
     xml::is_xml_name(raw)
@@ -158,6 +178,7 @@ static LAST_COLUMNAR: Mutex<Option<ColumnarSnapshot>> = Mutex::new(None);
 /// drop the parser counted (the streaming path logs each of these per item;
 /// the batch paths can only report post-hoc) and remember the counters for
 /// `last_read_diagnostics`.
+#[cfg(feature = "python")]
 fn report_columnar_stats(py: Python<'_>, stats: &parser::ColumnarStats, path: &str) {
     let (malformed, malformed_close, unterminated, discarded) = stats.snapshot();
     if stats.is_empty() {
@@ -217,6 +238,7 @@ fn report_columnar_stats(py: Python<'_>, stats: &parser::ColumnarStats, path: &s
 /// Drop counters from the most recent columnar/parallel read (`read_xml`,
 /// `read_xml_par`, `read_xml_stream`, or an exhausted
 /// `iter_xml_batches_par`), or None when that read dropped nothing.
+#[cfg(feature = "python")]
 #[pyfunction]
 fn last_read_diagnostics(py: Python<'_>) -> Option<Bound<'_, PyDict>> {
     let guard = LAST_COLUMNAR.lock().unwrap_or_else(|e| e.into_inner());
@@ -237,23 +259,45 @@ fn last_read_diagnostics(py: Python<'_>) -> Option<Bound<'_, PyDict>> {
 /// Incremental item stream: the rypipe `RecordStream` driver over the
 /// xmlstreamer scanner. `feed` pushes bytes; `next_item` returns
 /// `(2, item)`, `(1, None)` for need-more, `(0, None)` for EOF.
+#[cfg(feature = "python")]
 #[pyclass]
 struct RecordStream {
     inner: CoreRecordStream<XmlStreamParser>,
     diag: Arc<DiagSink>,
     queue: VecDeque<StreamRecord>,
+    /// Hard caps for a hostile or endless feed; `None` disables the cap.
+    max_bytes: Option<u64>,
+    max_items: Option<u64>,
+    bytes_fed: u64,
+    items_emitted: u64,
+    /// Set once a cap fires; the stream then drains and reports EOF.
+    capped: bool,
 }
 
+#[cfg(feature = "python")]
+impl RecordStream {
+    /// Record a cap breach once and stop feeding further bytes.
+    fn cap_reached(&mut self, code: &str, message: String) {
+        if !self.capped {
+            self.capped = true;
+            self.diag.warning(code, &message);
+        }
+    }
+}
+
+#[cfg(feature = "python")]
 #[pymethods]
 impl RecordStream {
     #[new]
-    #[pyo3(signature = (separator_tag, buffer_size, max_section_size, on_limit_text, deadline_secs=None))]
+    #[pyo3(signature = (separator_tag, buffer_size, max_section_size, on_limit_text, deadline_secs=None, max_bytes=None, max_items=None))]
     fn new(
         separator_tag: &str,
         buffer_size: usize,
         max_section_size: i64,
         on_limit_text: bool,
         deadline_secs: Option<f64>,
+        max_bytes: Option<u64>,
+        max_items: Option<u64>,
     ) -> Self {
         RecordStream {
             inner: CoreRecordStream::new(XmlStreamParser::new(
@@ -265,10 +309,41 @@ impl RecordStream {
             )),
             diag: Arc::new(DiagSink::default()),
             queue: VecDeque::new(),
+            max_bytes,
+            max_items,
+            bytes_fed: 0,
+            items_emitted: 0,
+            capped: false,
         }
     }
 
     fn feed(&mut self, chunk: &[u8]) -> PyResult<()> {
+        if self.capped {
+            return Ok(());
+        }
+        if let Some(max) = self.max_bytes {
+            let remaining = max.saturating_sub(self.bytes_fed);
+            if remaining == 0 {
+                self.cap_reached(
+                    "MAX_BYTES",
+                    format!("Stopped after {max} bytes: max_bytes reached"),
+                );
+                return Ok(());
+            }
+            if chunk.len() as u64 > remaining {
+                let take = remaining as usize;
+                self.inner
+                    .feed(&chunk[..take])
+                    .map_err(py_err_from_rypipe)?;
+                self.bytes_fed = max;
+                self.cap_reached(
+                    "MAX_BYTES",
+                    format!("Stopped after {max} bytes: max_bytes reached before the feed ended"),
+                );
+                return Ok(());
+            }
+        }
+        self.bytes_fed += chunk.len() as u64;
         self.inner.feed(chunk).map_err(py_err_from_rypipe)
     }
 
@@ -307,6 +382,17 @@ impl RecordStream {
     fn next_item<'py>(&mut self, py: Python<'py>) -> PyResult<(u8, Py<PyAny>, bool)> {
         loop {
             if let Some(record) = self.queue.pop_front() {
+                if let Some(max) = self.max_items {
+                    if self.items_emitted >= max {
+                        self.queue.clear();
+                        self.cap_reached(
+                            "MAX_ITEMS",
+                            format!("Stopped after {max} items: max_items reached"),
+                        );
+                        return Ok((0, py.None(), self.has_logs()));
+                    }
+                }
+                self.items_emitted += 1;
                 let item = record_to_py(py, record)?;
                 return Ok((2, item, self.has_logs()));
             }
@@ -326,6 +412,9 @@ impl RecordStream {
                 StreamState::Eof if has_queued => continue,
                 StreamState::Eof => return Ok((0, py.None(), self.has_logs())),
                 StreamState::NeedMore if has_queued => continue,
+                // A fired cap drains the already-parsed queue, then reports
+                // EOF instead of asking the driver for more bytes.
+                StreamState::NeedMore if self.capped => return Ok((0, py.None(), self.has_logs())),
                 StreamState::NeedMore => return Ok((1, py.None(), self.has_logs())),
                 StreamState::Rows => continue,
             }
@@ -333,6 +422,7 @@ impl RecordStream {
     }
 }
 
+#[cfg(feature = "python")]
 fn record_to_py(py: Python<'_>, record: StreamRecord) -> PyResult<Py<PyAny>> {
     let parsed = match record.parsed {
         Some(tags) => {
@@ -353,6 +443,7 @@ fn record_to_py(py: Python<'_>, record: StreamRecord) -> PyResult<Py<PyAny>> {
     Ok(payload.into_pyobject(py)?.unbind().into_any())
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (path, separator_tag="item".to_string(), field_mapping=None, drop_fields=None,
     filter=None, field_types=None, dictionary_columns=None, schema=None, auto_dict=false,
@@ -421,6 +512,7 @@ fn read_xml(
     record_batches_to_pyarrow_table(py, &[batch]).map(|table| table.unbind())
 }
 
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (path, separator_tag="item".to_string(), chunks=4, field_mapping=None,
     drop_fields=None, filter=None, field_types=None, dictionary_columns=None, schema=None,
@@ -491,6 +583,7 @@ fn read_xml_par(
 }
 
 /// Bounded-memory read: returns a list of `pyarrow.RecordBatch`.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (path, separator_tag="item".to_string(), memory=None, field_mapping=None,
     drop_fields=None, filter=None, field_types=None, dictionary_columns=None, schema=None,
@@ -569,6 +662,7 @@ fn read_xml_stream(
 ///
 /// The inner iterator lives behind a `Mutex` because its worker channel is
 /// `Send` but not `Sync`, and pyclasses must be both.
+#[cfg(feature = "python")]
 #[pyclass]
 struct ParallelBatches {
     inner: Arc<std::sync::Mutex<ParallelStreamingBatchIterator>>,
@@ -578,6 +672,7 @@ struct ParallelBatches {
     reported: std::sync::atomic::AtomicBool,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl ParallelBatches {
     fn __iter__(slf: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -606,6 +701,7 @@ impl ParallelBatches {
 
 /// Parallel streaming read: yields batches as the workers produce them,
 /// in file order when `ordered` is true.
+#[cfg(feature = "python")]
 #[pyfunction]
 #[pyo3(signature = (path, separator_tag="item".to_string(), threads=8, memory=None,
     ordered=true, field_mapping=None, drop_fields=None, filter=None, field_types=None,
@@ -694,6 +790,7 @@ fn iter_xml_batches_par(
     })
 }
 
+#[cfg(feature = "python")]
 #[pymodule]
 fn _xmlstreamer(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(parse_document, m)?)?;
