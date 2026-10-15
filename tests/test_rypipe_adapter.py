@@ -603,3 +603,38 @@ def test_rypipe_read_stream_par_and_batches(tmp_path):
     )
     assert [batch.num_rows for batch in batches] == [1, 1]
 
+
+# CDATA edge cases: the flat-item fast path must agree with the general parser
+# (the legacy Tokenizer) for empty sections, line-ending normalization,
+# non-ASCII content, markup-looking text and mixed text/CDATA.
+CDATA_EDGE_CASES = [
+    ("empty", b"<item><t><![CDATA[]]></t></item>"),
+    ("lone_bracket", b"<item><t><![CDATA[a]b]]></t></item>"),
+    ("double_bracket", b"<item><t><![CDATA[a]]b]]></t></item>"),
+    ("carriage_return", b"<item><t><![CDATA[a\r\nb]]></t></item>"),
+    ("non_ascii", "<item><t><![CDATA[cora\u00e7\u00e3o]]></t></item>".encode()),
+    ("markup_lookalike", b"<item><t><![CDATA[<b>x</b> &amp; y]]></t></item>"),
+    ("mixed_text", b"<item><t>pre<![CDATA[mid]]>post</t></item>"),
+    ("tab", b"<item><t><![CDATA[a\tb]]></t></item>"),
+]
+
+
+@pytest.mark.parametrize(
+    "name,feed", CDATA_EDGE_CASES, ids=[c[0] for c in CDATA_EDGE_CASES]
+)
+def test_cdata_edges_match_legacy(tmp_path, name, feed):
+    path = _write(tmp_path, feed)
+    expected = legacy_items(feed, "item")
+    assert _xmlstreamer.read_xml(path, separator_tag="item").to_pylist() == expected
+    assert (
+        _xmlstreamer.read_xml_par(path, separator_tag="item", chunks=2).to_pylist()
+        == expected
+    )
+    assert [
+        row
+        for batch in _xmlstreamer.read_xml_stream(
+            path, separator_tag="item", memory="1MiB"
+        )
+        for row in batch.to_pylist()
+    ] == expected
+
