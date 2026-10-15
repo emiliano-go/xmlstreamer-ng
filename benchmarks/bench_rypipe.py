@@ -17,7 +17,7 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
