@@ -6,6 +6,8 @@
 //! for more with a distinct status. The scanning cursors only move forward,
 //! so a huge comment or attribute value costs one pass, not one per refill.
 
+#![forbid(unsafe_code)] // all unsafe is confined to xml.rs
+
 use crate::xml;
 
 /// Collects the fields of one item into the owned `(key, value)` pairs the

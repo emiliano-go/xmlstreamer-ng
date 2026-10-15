@@ -4,6 +4,8 @@
 //! (comments, CDATA, processing instructions, DOCTYPE declarations) so a
 //! separator written inside one is never mistaken for a record boundary.
 
+#![forbid(unsafe_code)] // all unsafe is confined to xml.rs
+
 /// What `section_end` found at a position.
 pub enum Section {
     /// Not a section opener.

@@ -7,6 +7,8 @@
 //! counters after the read completes. A trailing partial item is left alone:
 //! the engine discards it.
 
+#![forbid(unsafe_code)] // all unsafe is confined to xml.rs
+
 use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};

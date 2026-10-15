@@ -6,6 +6,8 @@
 //! the diagnostics channel; this adapter reports each isolated item as a
 //! `StreamRecord` and forwards the engine's warnings.
 
+#![forbid(unsafe_code)] // all unsafe is confined to xml.rs
+
 use rypipe_core::{ParseDiagnostics, Result as RypipeResult, StreamingRecordParser};
 
 use crate::tokenizer::{Engine, Log, Next};

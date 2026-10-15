@@ -4,6 +4,13 @@
 //! expat and of `ItemHandler`: a wrapped item is parsed in isolation into a
 //! flat insertion-ordered `{path: text}` map, and anything not well formed
 //! invalidates the item alone.
+//!
+//! This is the only module permitted `unsafe`: every block turns a byte slice
+//! the scanner already validated as an XML name or a checked text run into a
+//! `&str` without a second validation pass. Each block carries a `SAFETY`
+//! note stating its invariant.
+
+#![deny(clippy::undocumented_unsafe_blocks)]
 
 const XML_WHITESPACE: [u8; 4] = *b" \t\r\n";
 const NAME_STOP: [u8; 10] = *b" \t\r\n=/<>\"'";
@@ -998,11 +1005,23 @@ pub trait FlatEmitter {
     }
 }
 
+/// Borrow a byte slice as `&str` without re-validating UTF-8.
+///
+/// The single `unsafe` in this module lives here. Every caller passes a slice
+/// the scanner already established as valid UTF-8: an XML name (validated by
+/// `name_end` / `start_tag_name` / `start_tag_checked_name`) or a text run
+/// (validated by `read_text_run` / `push_cdata`).
+#[inline]
+fn str_from_validated(bytes: &[u8]) -> &str {
+    // SAFETY: see the function contract; callers pass only validated slices.
+    unsafe { std::str::from_utf8_unchecked(bytes) }
+}
+
 #[inline]
 fn key_slice<'a>(key: KeySrc, content: &'a [u8], arena: &'a str) -> &'a str {
     match key {
         // SAFETY: keys point at tag bytes inside a UTF-8-validated chunk.
-        KeySrc::Content(s, e) => unsafe { std::str::from_utf8_unchecked(&content[s..e]) },
+        KeySrc::Content(s, e) => str_from_validated(&content[s..e]),
         KeySrc::Arena(s, e) => &arena[s as usize..(s + e) as usize],
     }
 }
@@ -1055,7 +1074,7 @@ impl TextBuf {
     fn push_run(&mut self, content: &[u8], start: usize, end: usize) {
         // SAFETY: `read_text_run` only hands over runs it validated (the
         // single-pass ASCII classifier above, or `from_utf8` below).
-        let run = unsafe { std::str::from_utf8_unchecked(&content[start..end]) };
+        let run = str_from_validated(&content[start..end]);
         if let Some(owned) = self.owned.as_mut() {
             owned.push_str(run);
             return;
@@ -1092,9 +1111,7 @@ fn pending_str<'a>(value: &'a PendingVal, content: &'a [u8]) -> Cow<'a, str> {
     match value {
         PendingVal::Empty => Cow::Borrowed(""),
         // SAFETY: text runs come from a UTF-8-validated chunk.
-        PendingVal::Content(s, e) => {
-            Cow::Borrowed(unsafe { std::str::from_utf8_unchecked(&content[*s..*e]) })
-        }
+        PendingVal::Content(s, e) => Cow::Borrowed(str_from_validated(&content[*s..*e])),
         PendingVal::Owned(s) => Cow::Borrowed(s.as_str()),
     }
 }
@@ -1504,7 +1521,7 @@ fn try_flat_item<E: FlatEmitter>(
                         return None;
                     };
                     // SAFETY: name bytes were validated as an XML name.
-                    let name = unsafe { std::str::from_utf8_unchecked(&bytes[ns..ne]) };
+                    let name = str_from_validated(&bytes[ns..ne]);
                     emitter.field(name, pending_str(&p.value, bytes).trim_end_matches('\n'));
                 }
                 emitter.row_end();
@@ -1523,7 +1540,7 @@ fn try_flat_item<E: FlatEmitter>(
                 scratch.flat_hashes.push(h);
                 if let Some(keep) = keep {
                     // SAFETY: validated XML name.
-                    let namestr = unsafe { std::str::from_utf8_unchecked(name) };
+                    let namestr = str_from_validated(name);
                     if !subtree_wanted(keep, namestr) {
                         i = skip_subtree_checked(bytes, after, name, strict)?;
                         continue;
@@ -1759,14 +1776,18 @@ pub fn parse_item_fused<E: FlatEmitter>(
         let name: &str = if strict {
             // One pass validates the tag and locates the name.
             match start_tag_checked_name(tag) {
-                Some((s, e)) => unsafe { std::str::from_utf8_unchecked(&tag[s..e]) },
+                // SAFETY: `start_tag_checked_name` validated the name bytes as
+                // an XML name, hence valid UTF-8.
+                Some((s, e)) => str_from_validated(&tag[s..e]),
                 None => return Fused::Malformed,
             }
         } else {
             // Fast mode: validate the element name, skip attribute-value
             // well-formedness (a trusted-feed optimization).
             match start_tag_name(tag) {
-                Some(raw) => unsafe { std::str::from_utf8_unchecked(raw) },
+                // SAFETY: `start_tag_name` returns the name slice only after
+                // validating it as an XML name, hence valid UTF-8.
+                Some(raw) => str_from_validated(raw),
                 None => return Fused::Malformed,
             }
         };
@@ -1901,7 +1922,8 @@ fn finish_item<E: FlatEmitter>(
     emitter.row_start();
     for p in pending.iter() {
         let name = match p.key {
-            KeySrc::Content(s, e) => unsafe { std::str::from_utf8_unchecked(&bytes[s..e]) },
+            // SAFETY: keys point at tag bytes inside a UTF-8-validated chunk.
+            KeySrc::Content(s, e) => str_from_validated(&bytes[s..e]),
             KeySrc::Arena(s, e) => &key_arena[s as usize..(s + e) as usize],
         };
         emitter.field(name, pending_str(&p.value, bytes).trim_end_matches('\n'));

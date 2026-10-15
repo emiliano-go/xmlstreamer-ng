@@ -1,5 +1,7 @@
 //! `rypipe_core::Splitter` for xmlstreamer feeds.
 
+#![forbid(unsafe_code)] // all unsafe is confined to xml.rs
+
 use rypipe_core::decoder::{plan_chunk_count_with, SplitMode, MIN_CHUNK_BYTES};
 use rypipe_core::Splitter;
 
