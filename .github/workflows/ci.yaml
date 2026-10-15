@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    # Weekly longer fuzz campaign (Mondays, 04:17 UTC).
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -72,6 +76,52 @@ jobs:
 
       - name: Clippy
         run: cargo clippy --manifest-path native/Cargo.toml --all-targets -- -D warnings
+
+  deny:
+    name: Supply chain audit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-deny
+        run: cargo install cargo-deny --locked
+
+      - name: Check advisories, licenses, and bans
+        run: cargo deny --manifest-path native/Cargo.toml check advisories licenses bans
+
+  overflow-checks:
+    name: Tests under overflow checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      # Build the engine with arithmetic overflow checks on, then run the whole
+      # suite against it, so integer overflow on crafted input fails CI instead
+      # of wrapping silently in the release build.
+      - name: Build the extension with overflow checks
+        run: |
+          uv sync
+          RUSTFLAGS="-C overflow-checks=on" uvx maturin develop --release --manifest-path native/Cargo.toml
+
+      - name: Run the suite
+        run: uv run --no-sync pytest tests/ -q
 
   build:
     runs-on: ubuntu-latest
@@ -165,3 +215,88 @@ jobs:
       # this proves the harness runs end to end, never asserts speed.
       - name: Benchmark harness smoke run
         run: uv run --group bench python benchmarks/run_all.py --quick
+
+  fuzz-smoke:
+    runs-on: ubuntu-latest
+    needs: rust-lint
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nightly and cargo-fuzz
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+      - run: cargo install cargo-fuzz --locked
+
+      - name: Run all fuzz targets
+        run: |
+          mkdir -p fuzz/artifacts
+          for target in fuzz_parse_document fuzz_columnar fuzz_tokenizer; do
+            mkdir -p "fuzz/corpus/$target"
+            find fuzz/seeds -type f -exec cp -n {} "fuzz/corpus/$target/" \;
+          done
+          for target in fuzz_parse_document fuzz_columnar fuzz_tokenizer; do
+            mkdir -p "$GITHUB_WORKSPACE/native/fuzz/artifacts/$target"
+            cargo +nightly fuzz run "$target" -- -max_total_time=30 -artifact_prefix="$GITHUB_WORKSPACE/native/fuzz/artifacts/$target/"
+          done
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Upload fuzz artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fuzz-smoke-artifacts
+          path: native/fuzz/artifacts
+
+  fuzz-long:
+    name: Scheduled fuzz campaign
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    needs: rust-lint
+    defaults:
+      run:
+        working-directory: native
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install nightly and cargo-fuzz
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: nightly
+      - run: cargo install cargo-fuzz --locked
+
+      - name: Restore persistent corpora
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: native/fuzz/corpus
+          key: fuzz-corpus-${{ github.ref_name }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ github.ref_name }}-
+
+      - name: Run longer campaigns
+        run: |
+          mkdir -p fuzz/artifacts
+          for target in fuzz_parse_document fuzz_columnar fuzz_tokenizer; do
+            mkdir -p "fuzz/corpus/$target"
+            find fuzz/seeds -type f -exec cp -n {} "fuzz/corpus/$target/" \;
+          done
+          for target in fuzz_parse_document fuzz_columnar fuzz_tokenizer; do
+            mkdir -p "$GITHUB_WORKSPACE/native/fuzz/artifacts/$target"
+            cargo +nightly fuzz run "$target" -- -max_total_time=600 -artifact_prefix="$GITHUB_WORKSPACE/native/fuzz/artifacts/$target/"
+          done
+
+      - name: Upload campaign artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: fuzz-long-artifacts
+          path: native/fuzz/artifacts
