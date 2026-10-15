@@ -146,9 +146,10 @@ jobs:
         run: uv build
 
       - name: Smoke test the wheel
-        run: >
-          uv run --isolated --no-project --with dist/*.whl
-          python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
+        run: |
+          cd "$(mktemp -d)"
+          uv run --isolated --no-project --with "$GITHUB_WORKSPACE"/dist/*.whl \
+            python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
       - name: Smoke test the source distribution
         run: >
@@ -185,9 +186,10 @@ jobs:
 
       - name: Smoke test the wheel
         shell: bash
-        run: >
-          uv run --isolated --no-project --with dist/*.whl
-          python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
+        run: |
+          cd "$(mktemp -d)"
+          uv run --isolated --no-project --with "$GITHUB_WORKSPACE"/dist/*.whl \
+            python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

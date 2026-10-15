@@ -45,6 +45,8 @@ Issues = "https://github.com/emiliano-go/xmlstreamer-ng/issues"
 bench = [
     "lxml>=6.1.1",
     "xmltodict>=1.0.4",
+    "simdxml==0.3.0",
+    "xmlstreamer==2.2.0",
 ]
 dev = [
   "hypothesis>=6.164.0",
