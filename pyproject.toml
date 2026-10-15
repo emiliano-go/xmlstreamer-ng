@@ -29,7 +29,7 @@ keywords = ["xml", "streaming", "parser", "lightweight", "http", "https", "ftp",
 dependencies = [
   "chardet>=5.2",
   "requests>=2.33",
-  "rypipe>=0.6.0",
+  "rypipe>=0.6.1",
   "pyarrow>=15"
 ]
 
