@@ -152,9 +152,10 @@ jobs:
             python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
       - name: Smoke test the source distribution
-        run: >
-          uv run --isolated --no-project --with dist/*.tar.gz
-          python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
+        run: |
+          cd "$(mktemp -d)"
+          uv run --isolated --no-project --with "$GITHUB_WORKSPACE"/dist/*.tar.gz \
+            python -c "import xmlstreamer_ng; print(xmlstreamer_ng.__version__)"
 
   wheels:
     # abi3-py310: one wheel per platform covers Python 3.10+.
