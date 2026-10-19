@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <item><t>a</t></item>
+  <!-- a comment that never closes <item><t>fake</t></item>
+  <item><t>b</t></item>
+</feed>

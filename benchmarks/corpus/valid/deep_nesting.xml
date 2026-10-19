@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <item>
+    <a><b><c><d><e><f><g>deep</g></f></e></d></c></b></a>
+  </item>
+  <item>
+    <a><b><c>shallow</c></b></a>
+  </item>
+</feed>

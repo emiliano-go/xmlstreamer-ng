@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <item>
+    <t>a &amp; b &lt; c &gt; d</t>
+    <t>caf&#233; &#x1F600;</t>
+  </item>
+  <item>
+    <t>plain text</t>
+  </item>
+</feed>

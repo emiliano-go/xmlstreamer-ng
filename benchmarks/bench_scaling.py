@@ -7,8 +7,9 @@ CDATA 50k-item feed and a 128 MiB plain feed.
 
     uv run --group bench python benchmarks/bench_scaling.py [--quick]
 
-Rows are best-of-N rounds; absolute numbers track the machine (CPU,
-page-cache state, background load), the thread-count shape is the result.
+Rows are the median of N rounds (best and p95 reported too); absolute
+numbers track the machine (CPU, page-cache state, background load), the
+thread-count shape is the result.
 """
 
 import argparse
@@ -23,15 +24,16 @@ from typing import Callable, Dict, List, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from feeds import cdata_feed, plain_feed, write_plain_feed  # noqa: E402
+from feeds import (  # noqa: E402
+    cdata_feed,
+    plain_feed,
+    write_plain_feed_mb,
+)
+from stats import summarize  # noqa: E402
 
 MB = 1024 * 1024
 THREADS = (1, 2, 4, 8, 12)
-AVG_ITEM_BYTES = 110  # PLAIN_ITEM_TEMPLATE is ~110 bytes
-# Target size for the big feed; actual output is ~1.28x (the template is
-# ~141 bytes), so 100 MiB lands on the ~128 MiB feed bench_rypipe.py
-# produces with --feed-mb 100 and docs/benchmarks/adapter.md reports.
-BIG_MIB = 100
+BIG_MIB = 128
 
 
 def _cpu_model() -> str:
@@ -61,8 +63,7 @@ def make_feeds(quick: bool) -> Dict[str, Tuple[Path, int]]:
     feeds[f"cdata {sizes['cdata']:,}"] = (cdata_path, cdata_path.stat().st_size)
     big_path = tmp / "big.xml"
     with open(big_path, "wb") as f:
-        n = max(1, (sizes["big_mib"] * MB) // AVG_ITEM_BYTES)
-        written = write_plain_feed(f, n, block_items=50_000)
+        _, written = write_plain_feed_mb(f, sizes["big_mib"], block_items=50_000)
     feeds[f"plain {written / MB:,.0f} MiB"] = (big_path, written)
     return feeds
 
@@ -130,46 +131,59 @@ def _paths() -> Dict[str, Callable[[str], int]]:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--quick", action="store_true")
+    ap.add_argument("--out", metavar="FILE")
     args = ap.parse_args()
 
-    print("# rypipe adapter scaling (crxml style)\n")
-    print(
+    lines = [
+        "# rypipe adapter scaling (crxml style)",
+        "",
         f"Date: {date.today().isoformat()} | CPU: {_cpu_model()} | "
         f"Python {platform.python_version()} | "
         f"xmlstreamer_ng {version('xmlstreamer-ng')}, "
-        f"pyarrow {version('pyarrow')}"
-    )
+        f"pyarrow {version('pyarrow')}",
+    ]
     if args.quick:
-        print("\nMode: --quick (smoke sizes; numbers are NOT representative)")
+        lines.append(
+            "\nMode: --quick (smoke sizes; numbers are NOT representative)"
+        )
 
     feeds = make_feeds(args.quick)
     paths = _paths()
     rows: List[List[str]] = []
     for feed_name, (path, size) in feeds.items():
         for path_name, fn in paths.items():
-            best = None
+            times = []
             n_rows = 0
             for _ in range(args.rounds):
                 t0 = time.perf_counter()
                 n_rows = fn(str(path))
-                elapsed = time.perf_counter() - t0
-                if best is None or elapsed < best:
-                    best = elapsed
+                times.append(time.perf_counter() - t0)
+            timing = summarize(times)
             rows.append([
                 feed_name,
                 path_name,
                 f"{n_rows:,}",
-                f"{best:.3f}",
-                f"{n_rows / best:,.0f}",
-                f"{size / MB / best:,.1f}",
+                f"{timing['median']:.3f}",
+                f"{timing['best']:.3f}",
+                f"{timing['p95']:.3f}",
+                f"{timing['spread']:.1f}%",
+                f"{n_rows / timing['median']:,.0f}",
+                f"{size / MB / timing['median']:,.1f}",
             ])
 
-    print("\n| feed | path | rows | seconds | rows/s | MB/s |")
-    print("|---|---|---|---|---|---|")
+    lines.append(
+        "\n| feed | path | rows | median s | best s | p95 s | spread | "
+        "rows/s (median) | MB/s |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|")
     for row in rows:
-        print("| " + " | ".join(row) + " |")
+        lines.append("| " + " | ".join(row) + " |")
+    text = "\n".join(lines)
+    print(text)
+    if args.out:
+        Path(args.out).write_text(text + "\n")
 
 
 if __name__ == "__main__":

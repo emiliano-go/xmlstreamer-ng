@@ -219,6 +219,14 @@ jobs:
       - name: Benchmark harness smoke run
         run: uv run --group bench python benchmarks/run_all.py --quick
 
+      - name: Corpus benchmark smoke run
+        run: uv run --group bench python benchmarks/bench_corpus.py --rounds 1
+
+      # The differential half of the conformance suite needs lxml, which
+      # is a bench-group dependency; the default `tests` job skips it.
+      - name: Conformance suite (with lxml)
+        run: uv run --group bench pytest tests/test_conformance.py -q
+
   fuzz-smoke:
     runs-on: ubuntu-latest
     needs: rust-lint

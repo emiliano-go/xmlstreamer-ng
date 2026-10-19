@@ -1,70 +1,23 @@
-# Consolidated comparison: all engines, one feed
+Common feed: synthetic plain feed (`feeds.py`), 128 MiB target, 951,898 items. Headline is the median of 5 rounds; best and p95 are shown beside it.
 
-Every engine reads the same synthetic plain feed from `feeds.py`:
-128 MiB on disk, 953,250 items. This is the one feed all of them can
-parse, so it is the common denominator for a single table. Timing is
-best of 3 rounds.
+Date: 2026-10-19 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.13.15 | xmlstreamer-ng 2.1.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python) 0.3.0, pyarrow 26.0.0; quick-xml 0.37.5, simdxml 0.2.1 (git), pugixml 1.15
 
-Regenerate this table with:
+| engine | items/s (median) | best items/s | p95 s | spread | MB/s | peak RSS MB | threads | API/notes |
+|---|---|---|---|---|---|---|---|---|
+| xmlstreamer-ng per-item | 567k | 600k | 1.723 | 8.0% | 76.2 | 88 | 1 | per-item dicts |
+| XmlSource columnar | 3.9M | 3.9M | 0.250 | 3.4% | 527.6 | 315 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 16.5M | 17.2M | 0.062 | 12.3% | 2214.1 | 326 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 11.2M | 11.9M | 0.331 | 294.4% | 1501.0 | 214 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 111k | 112k | 8.762 | 2.9% | 14.9 | 34 | 1 | per-item dicts |
+| lxml iterparse (count) | 493k | 508k | 1.945 | 3.7% | 66.2 | 26 | 1 | iterparse + clear(), no records |
+| stdlib ET iterparse (count) | 339k | 347k | 2.888 | 5.1% | 45.6 | 21 | 1 | iterparse + root.clear(), no records |
+| lxml iterparse (dicts) | 334k | 335k | 2.927 | 3.1% | 44.9 | 26 | 1 | per-item dicts |
+| stdlib ET iterparse (dicts) | 308k | 310k | 3.153 | 2.7% | 41.4 | 21 | 1 | per-item dicts |
+| xmltodict | 101k | 109k | 9.513 | 7.9% | 13.5 | 469 | 1 | whole-document dict |
+| simdxml (Python) | 506k | 531k | 1.899 | 5.6% | 67.9 | 1066 | 1 | per-item dicts, whole-doc parse |
+| simdxml parallel (Python) | 531k | 535k | 1.858 | 4.4% | 71.4 | 1067 | 16 | per-item dicts, parallel SIMD parse |
+| quick-xml 0.37.5 | 3.2M | 3.2M | 0.297 | 0.0% | 429.9 | 14 | 1 | parse+count only, no data; best of N |
+| simdxml 0.2.1 (git) | 1.7M | 1.7M | 0.546 | 0.0% | 234.0 | 730 | 1 | parse+count only, no data; best of N |
+| pugixml 1.15 | 2.3M | 2.3M | 0.415 | 0.0% | 308.2 | 773 | 1 | parse+count only, no data; best of N |
 
-```bash
-python benchmarks/bench_all.py
-```
-
-`bench_all.py` writes the markdown to stdout (or a file with `--out`).
-When the native binaries are not built it omits those rows and prints a
-note; build them with `benchmarks/native/build_native.sh`.
-
-## Results
-
-Date: 2026-10-14 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.13.15 | xmlstreamer-ng 2.0.0, xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python) 0.3.0, pyarrow 26.0.0; quick-xml 0.37.5, simdxml 0.2.1 (git), pugixml 1.15
-
-| engine | items/s | MB/s | peak RSS MB | threads | API/notes |
-|---|---|---|---|---|---|
-| xmlstreamer-ng per-item | 545k | 73.2 | 73 | 1 | per-item dicts |
-| XmlSource columnar | 3.6M | 481.0 | 310 | 1 | Arrow batches |
-| XmlSource parallel (8 threads) | 12.7M | 1704.2 | 285 | 8 | Arrow batches, 8 threads |
-| XmlSource bounded parallel streaming | 10.6M | 1419.9 | 205 | 8 | bounded batches, 8 threads |
-| xmlstreamer (original) | 98k | 13.2 | 33 | 1 | per-item dicts |
-| lxml iterparse | 465k | 62.5 | 26 | 1 | iterparse + clear() |
-| stdlib ET iterparse | 328k | 44.0 | 20 | 1 | iterparse + root.clear() |
-| xmltodict | 98k | 13.1 | 469 | 1 | whole-document dict |
-| simdxml (Python) | 489k | 65.7 | 1067 | 1 | per-item dicts, whole-doc parse |
-| simdxml parallel (Python) | 455k | 61.1 | 1059 | 16 | per-item dicts, parallel SIMD parse |
-| quick-xml 0.37.5 | 2.8M | 382.4 | 227 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.4M | 188.4 | 722 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.0M | 267.7 | 773 | 1 | parse+count only, no data |
-
-## How to read it
-
-- items/s is derived from the measured MB/s and the known item count
-  (953,250), rounded to 2-3 significant figures.
-- Peak RSS for the Python engines is measured in a fresh `--worker`
-  subprocess that runs the engine once and reports `VmHWM` from
-  `/proc/self/status` (the convention used by `bench_memory.py` and
-  `bench_rypipe.py`; `ru_maxrss` would inherit the forking parent's
-  peak, and `VmHWM` restarts at exec).
-- Peak RSS for the native counters has no Python layer to host a
-  worker, so the binary is exec'd directly under `os.wait4` and its
-  `ru_maxrss` is read from the returned rusage (no `/usr/bin/time`
-  dependency).
-- Native rows are speed-only references: those binaries parse and
-  count elements but keep no records, do no encoding detection and
-  have no recovery contract. Their RSS reflects that parse-only
-  workload, so it is not comparable with the RSS of engines that
-  materialize data (the xmlstreamer-ng parallel rows hold the full
-  Arrow table; xmltodict holds the whole document dict).
-- The two simdxml (Python) rows use the PyPI `simdxml` package
-  (0.3.0, Rust engine with Python bindings): the whole document is
-  parsed in memory, then per-item dicts are materialized from
-  `xpath("//item")`. Its peak RSS is high because the parsed document
-  and the element wrappers coexist in memory; the parallel variant
-  (`parse(parallel=True)`) only parallelizes the SIMD structural
-  indexing, not the Python-side record extraction, so it is barely
-  faster on this feed.
-- Per-feed speed, peak memory, adapter scaling and dirty-feed
-  behavior live in the sibling documents (`run_all.md`, `scaling.md`,
-  `native.md`); this table is the summary, those are the detail.
-
-Absolute numbers track the machine; the ratios are stable across
-runs.
+Native rows are speed-only references (parse and count, no encoding detection, recovery contract, or data materialization).

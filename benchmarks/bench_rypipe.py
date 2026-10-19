@@ -3,35 +3,39 @@
 Measures the legacy per-item engine against the rypipe columnar, parallel and
 bounded-streaming paths on large, deterministic feeds.
 
-    uv run --group bench python benchmarks/bench_rypipe.py --feed-mb 100
+    uv run --group bench python benchmarks/bench_rypipe.py --feed-mb 128
 
-Rows are best-of-N; peak RSS is measured in a fresh subprocess
-(``--worker <engine>``) from ``/proc/self/status``.
+Timing is the median of N rounds (best and p95 are also reported); peak
+RSS is measured in a fresh subprocess (``--worker <engine>``) from
+``/proc/self/status``.
 """
 
 import argparse
 import os
+import platform
 import resource
 import subprocess
 import sys
 import tempfile
 import time
+from datetime import date
+from importlib.metadata import version
 from pathlib import Path
 from typing import Callable, Dict
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from feeds import write_plain_feed  # noqa: E402
+from feeds import write_plain_feed_mb  # noqa: E402
+from stats import summarize  # noqa: E402
 
 MB = 1024 * 1024
-AVG_ITEM_BYTES = 110  # PLAIN_ITEM_TEMPLATE is ~110 bytes
+DEFAULT_FEED_MB = 128
 
 
 def make_feed(path: str, target_mb: int) -> int:
     """Write a plain feed of roughly ``target_mb`` megabytes; returns bytes."""
-    n_items = max(1, (target_mb * MB) // AVG_ITEM_BYTES)
     with open(path, "wb") as f:
-        written = write_plain_feed(f, n_items, block_items=50_000)
+        _, written = write_plain_feed_mb(f, target_mb, block_items=50_000)
     return written
 
 
@@ -217,11 +221,22 @@ def worker(engine: str, path: str) -> None:
     print(f"{engine}\t{n}\t{peak_rss_mb():.1f}")
 
 
+def _cpu_model() -> str:
+    try:
+        for line in Path("/proc/cpuinfo").read_text().splitlines():
+            if line.startswith("model name"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return platform.processor() or platform.machine()
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--feed-mb", type=int, default=100)
-    ap.add_argument("--rounds", type=int, default=3)
+    ap.add_argument("--feed-mb", type=int, default=DEFAULT_FEED_MB)
+    ap.add_argument("--rounds", type=int, default=5)
     ap.add_argument("--keep", action="store_true")
+    ap.add_argument("--out", metavar="FILE")
     ap.add_argument("--worker", nargs=2, metavar=("ENGINE", "PATH"))
     args = ap.parse_args()
 
@@ -234,20 +249,29 @@ def main() -> None:
     try:
         size = make_feed(path, args.feed_mb)
         data = Path(path).read_bytes()
-        print(
-            f"# rypipe adapter benchmark\n\nfeed: {path} "
-            f"({size / MB:.1f} MiB)\n\n"
-            "| engine | items | seconds | items/s | MB/s | peak RSS MB |"
-        )
-        print("|---|---|---|---|---|---|")
+        lines = [
+            "# rypipe adapter benchmark",
+            "",
+            f"Date: {date.today().isoformat()} | CPU: {_cpu_model()} | "
+            f"Python {platform.python_version()} | "
+            f"xmlstreamer_ng {version('xmlstreamer-ng')}, "
+            f"pyarrow {version('pyarrow')}",
+            "",
+            f"Synthetic plain feed (`feeds.py`): {size / MB:.1f} MiB. "
+            f"Headline is the median of {args.rounds} rounds; best and "
+            "p95 are shown beside it.",
+            "",
+            "| engine | items | median s | best s | p95 s | spread | "
+            "items/s (median) | MB/s | peak RSS MB |",
+            "|---|---|---|---|---|---|---|---|---|",
+        ]
 
         for name, fn in ENGINES.items():
-            best = None
+            times = []
             items = 0
             for _ in range(args.rounds):
-                elapsed = _run_one(name, fn, path, data)
-                if best is None or elapsed < best:
-                    best = elapsed
+                times.append(_run_one(name, fn, path, data))
+            timing = summarize(times)
             # item count from a single clean run
             if name.startswith("legacy"):
                 items = fn(path, data)
@@ -267,10 +291,17 @@ def main() -> None:
             peak = "?"
             if rss.returncode == 0 and rss.stdout.strip():
                 peak = rss.stdout.strip().split("\t")[-1]
-            print(
-                f"| {name} | {items:,} | {best:.3f} | {items / best:,.0f} "
-                f"| {size / MB / best:,.1f} | {peak} |"
+            lines.append(
+                f"| {name} | {items:,} | {timing['median']:.3f} | "
+                f"{timing['best']:.3f} | {timing['p95']:.3f} | "
+                f"{timing['spread']:.1f}% | "
+                f"{items / timing['median']:,.0f} | "
+                f"{size / MB / timing['median']:,.1f} | {peak} |"
             )
+        text = "\n".join(lines)
+        print(text)
+        if args.out:
+            Path(args.out).write_text(text + "\n")
     finally:
         if not args.keep:
             os.unlink(path)

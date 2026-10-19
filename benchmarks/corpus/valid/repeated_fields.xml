@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <item>
+    <cat>a</cat>
+    <cat>b</cat>
+    <cat>c</cat>
+    <name>first</name>
+  </item>
+  <item>
+    <cat>x</cat>
+    <name>second</name>
+    <name>alias</name>
+  </item>
+</feed>

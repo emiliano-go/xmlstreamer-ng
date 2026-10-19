@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <?generator corpus?>
+  <item>
+    <!-- a commented-out <item>must not become a record</item> -->
+    <title>A History of Bridges</title>
+    <?note keep?>
+    <year>1998</year>
+  </item>
+  <item>
+    <title>Rivers of the World</title>
+  </item>
+</feed>

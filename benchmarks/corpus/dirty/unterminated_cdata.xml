@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <item><t>a</t></item>
+  <item><d><![CDATA[a section that never closes</d></item>
+  <item><t>b</t></item>
+</feed>

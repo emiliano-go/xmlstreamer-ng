@@ -3,6 +3,13 @@ same bytes, no randomness. Nothing here comes from real feeds."""
 
 from typing import BinaryIO
 
+MIB = 1024 * 1024
+
+# The template is 136 bytes plus the digits of the id; at ~1M items the
+# mean is ~140.9 bytes. Keep one constant so every benchmark asks for the
+# same feed size instead of repeating (and drifting from) this number.
+PLAIN_ITEM_BYTES = 141
+
 PLAIN_ITEM_TEMPLATE = (
     b"<item><id>%d</id><title>A History of Bridges</title>"
     b"<author>A. Smith</author><publisher>Example Press</publisher>"
@@ -45,3 +52,22 @@ def write_plain_feed(f: BinaryIO, n_items: int, block_items: int = 10_000) -> in
     written += f.write(b"</feed>")
     f.flush()
     return written
+
+
+def plain_item_count(target_mib: int) -> int:
+    """Approximate item count for a plain feed of ``target_mib`` MiB."""
+    return max(1, (target_mib * MIB) // PLAIN_ITEM_BYTES)
+
+
+def write_plain_feed_mb(
+    f: BinaryIO, target_mib: int = 128, block_items: int = 10_000
+) -> tuple[int, int]:
+    """Write a plain feed of roughly ``target_mib`` MiB.
+
+    Returns ``(n_items, bytes_written)``; the actual size lands within
+    ~1% of the target because the per-item byte count grows with the id
+    digits.
+    """
+    n_items = plain_item_count(target_mib)
+    written = write_plain_feed(f, n_items, block_items=block_items)
+    return n_items, written

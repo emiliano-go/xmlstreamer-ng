@@ -20,11 +20,14 @@ from typing import Dict, List, Optional, Tuple
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from feeds import cdata_feed, plain_feed, write_plain_feed  # noqa: E402
+from feeds import (  # noqa: E402
+    cdata_feed,
+    plain_feed,
+    write_plain_feed_mb,
+)
 
 MB = 1024 * 1024
-AVG_ITEM_BYTES = 110
-BIG_MIB = 100  # ~128 MiB actual; same feed bench_rypipe.py --feed-mb 100 makes
+BIG_MIB = 128  # same 128 MiB feed the other harnesses use
 
 HERE = Path(__file__).resolve().parent
 BIN_DIR = HERE / "native" / "bin"
@@ -58,8 +61,7 @@ def make_feeds(quick: bool) -> Dict[str, Tuple[Path, int]]:
     feeds[f"cdata {sizes['cdata']:,}"] = (cdata_path, cdata_path.stat().st_size)
     big_path = tmp / "big.xml"
     with open(big_path, "wb") as f:
-        n = max(1, (sizes["big_mib"] * MB) // AVG_ITEM_BYTES)
-        written = write_plain_feed(f, n, block_items=50_000)
+        _, written = write_plain_feed_mb(f, sizes["big_mib"], block_items=50_000)
     feeds[f"plain {written / MB:,.0f} MiB"] = (big_path, written)
     return feeds
 
@@ -101,8 +103,11 @@ def main() -> None:
             file=sys.stderr,
         )
         sys.exit(1)
-    print("| feed | parser | items | seconds | items/s | MB/s |")
-    print("|---|---|---|---|---|---|")
+    print(
+        "| feed | parser | items | best seconds | items/s | MB/s |",
+        "|---|---|---|---|---|---|",
+        sep="\n",
+    )
     for r in run_native(bins=bins):
         print(
             f"| {r['feed']} | {r['parser']} | {r['items']:,} | "

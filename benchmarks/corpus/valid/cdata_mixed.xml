@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <item>
+    <title>A History of Bridges</title>
+    <desc><![CDATA[A survey of <b>bridge</b> engineering & construction.]]></desc>
+    <topics><![CDATA[masonry, steel]]></topics>
+  </item>
+  <item>
+    <title>Rivers of the World</title>
+    <desc>Plain <b>mixed</b> content with <i>inline</i> markup.</desc>
+  </item>
+</feed>

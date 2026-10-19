@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed>
+  <item id="1" lang="en">
+    <title lang="en">A History of Bridges</title>
+    <author role="primary">A. Smith</author>
+  </item>
+  <item id="2">
+    <title>Rivers of the World</title>
+    <author>B. Jones</author>
+  </item>
+</feed>

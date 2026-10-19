@@ -1,70 +1,42 @@
 # rypipe adapter scaling (crxml style)
 
-Date: 2026-10-14 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.13.15 | xmlstreamer_ng 2.0.0, pyarrow 26.0.0
+Date: 2026-10-19 | CPU: AMD Ryzen 7 5800X 8-Core Processor | Python 3.13.15 | xmlstreamer_ng 2.1.0, pyarrow 26.0.0
 
-Measured by `benchmarks/bench_scaling.py` (best of 3 rounds), the same
-style as emiliano-go/crxml's benchmark tables: rows/s and MB/s per adapter
-path, swept over thread counts on deterministic feeds. Absolute numbers
-track the machine (CPU, page-cache state, background load); the
-thread-count shape is the result.
-
-| feed | path | rows | seconds | rows/s | MB/s |
-|---|---|---|---|---|---|
-| plain 100,000 | read_xml | 100,000 | 0.024 | 4,167,361 | 556.0 |
-| plain 100,000 | read_xml_stream (64MiB) | 100,000 | 0.027 | 3,689,366 | 492.2 |
-| plain 100,000 | read_xml_par (chunks=1) | 100,000 | 0.024 | 4,150,325 | 553.7 |
-| plain 100,000 | read_xml_par (chunks=2) | 100,000 | 0.008 | 12,867,151 | 1,716.6 |
-| plain 100,000 | read_xml_par (chunks=4) | 100,000 | 0.009 | 11,584,045 | 1,545.4 |
-| plain 100,000 | read_xml_par (chunks=8) | 100,000 | 0.007 | 13,871,834 | 1,850.6 |
-| plain 100,000 | read_xml_par (chunks=12) | 100,000 | 0.006 | 15,664,178 | 2,089.7 |
-| plain 100,000 | iter_xml_batches_par (threads=1) | 100,000 | 0.029 | 3,435,398 | 458.3 |
-| plain 100,000 | iter_xml_batches_par (threads=2) | 100,000 | 0.018 | 5,607,262 | 748.1 |
-| plain 100,000 | iter_xml_batches_par (threads=4) | 100,000 | 0.012 | 8,533,956 | 1,138.5 |
-| plain 100,000 | iter_xml_batches_par (threads=8) | 100,000 | 0.009 | 11,244,125 | 1,500.1 |
-| plain 100,000 | iter_xml_batches_par (threads=12) | 100,000 | 0.008 | 12,062,827 | 1,609.3 |
-| cdata 50,000 | read_xml | 50,000 | 0.021 | 2,395,395 | 1,130.3 |
-| cdata 50,000 | read_xml_stream (64MiB) | 50,000 | 0.021 | 2,382,762 | 1,124.3 |
-| cdata 50,000 | read_xml_par (chunks=1) | 50,000 | 0.019 | 2,570,050 | 1,212.7 |
-| cdata 50,000 | read_xml_par (chunks=2) | 50,000 | 0.012 | 4,050,692 | 1,911.3 |
-| cdata 50,000 | read_xml_par (chunks=4) | 50,000 | 0.012 | 4,173,299 | 1,969.2 |
-| cdata 50,000 | read_xml_par (chunks=8) | 50,000 | 0.012 | 4,194,911 | 1,979.4 |
-| cdata 50,000 | read_xml_par (chunks=12) | 50,000 | 0.013 | 3,728,661 | 1,759.4 |
-| cdata 50,000 | iter_xml_batches_par (threads=1) | 50,000 | 0.035 | 1,436,212 | 677.7 |
-| cdata 50,000 | iter_xml_batches_par (threads=2) | 50,000 | 0.023 | 2,174,804 | 1,026.2 |
-| cdata 50,000 | iter_xml_batches_par (threads=4) | 50,000 | 0.020 | 2,508,435 | 1,183.6 |
-| cdata 50,000 | iter_xml_batches_par (threads=8) | 50,000 | 0.018 | 2,855,080 | 1,347.2 |
-| cdata 50,000 | iter_xml_batches_par (threads=12) | 50,000 | 0.020 | 2,455,449 | 1,158.6 |
-| plain 128 MiB | read_xml | 953,250 | 0.242 | 3,943,150 | 529.8 |
-| plain 128 MiB | read_xml_stream (64MiB) | 953,250 | 0.258 | 3,695,025 | 496.5 |
-| plain 128 MiB | read_xml_par (chunks=1) | 953,250 | 0.236 | 4,034,767 | 542.1 |
-| plain 128 MiB | read_xml_par (chunks=2) | 953,250 | 0.066 | 14,362,809 | 1,929.7 |
-| plain 128 MiB | read_xml_par (chunks=4) | 953,250 | 0.063 | 15,108,172 | 2,029.9 |
-| plain 128 MiB | read_xml_par (chunks=8) | 953,250 | 0.062 | 15,386,644 | 2,067.3 |
-| plain 128 MiB | read_xml_par (chunks=12) | 953,250 | 0.060 | 15,892,061 | 2,135.2 |
-| plain 128 MiB | iter_xml_batches_par (threads=1) | 953,250 | 0.265 | 3,601,839 | 483.9 |
-| plain 128 MiB | iter_xml_batches_par (threads=2) | 953,250 | 0.153 | 6,236,948 | 838.0 |
-| plain 128 MiB | iter_xml_batches_par (threads=4) | 953,250 | 0.097 | 9,819,625 | 1,319.3 |
-| plain 128 MiB | iter_xml_batches_par (threads=8) | 953,250 | 0.074 | 12,821,134 | 1,722.6 |
-| plain 128 MiB | iter_xml_batches_par (threads=12) | 953,250 | 0.066 | 14,484,747 | 1,946.1 |
-
-Reading the shape:
-
-- Single-threaded paths (read_xml, read_xml_stream, chunks=1,
-  threads=1) all sit at 3.4-4.2M rows/s on the flat feeds;
-  parallelism, not the parser, is the whole story below.
-- `read_xml_par` jumps ~4x at chunks=2 and saturates the
-  8-core/16-thread CPU around chunks=8 on the big feed (15.4M
-  rows/s, 2067 MB/s at chunks=8 this run). Past the physical core
-  count the extra threads only add noise.
-- The CDATA feed is bytes-heavier per row, so its rows/s look lower
-  while its MB/s are the highest in the table (~2.0 GB/s at
-  chunks=4-8).
-- `iter_xml_batches_par` scales more gradually: it pays
-  bounded-memory batch production and Python-level iteration, so it
-  peaks lower than `read_xml_par` (14.5M vs 15.9M rows/s on the big
-  feed) in exchange for a flat memory profile (see adapter.md for
-  RSS).
-- On the small 100k/50k feeds the parallel numbers are inflated by
-  fixed-cost amortization (a 6-30 ms run vs a ~10 ms mmap+thread
-  spin-up); read them as "small files scale poorly, fixed costs
-  dominate", the same caveat crxml documents for its 10 MB files.
+| feed | path | rows | median s | best s | p95 s | spread | rows/s (median) | MB/s |
+|---|---|---|---|---|---|---|---|---|
+| plain 100,000 | read_xml | 100,000 | 0.024 | 0.022 | 0.121 | 407.9% | 4,099,876 | 547.0 |
+| plain 100,000 | read_xml_stream (64MiB) | 100,000 | 0.027 | 0.025 | 0.028 | 14.2% | 3,729,682 | 497.6 |
+| plain 100,000 | read_xml_par (chunks=1) | 100,000 | 0.025 | 0.024 | 0.027 | 12.0% | 3,982,076 | 531.2 |
+| plain 100,000 | read_xml_par (chunks=2) | 100,000 | 0.009 | 0.007 | 0.009 | 21.3% | 11,542,682 | 1,539.9 |
+| plain 100,000 | read_xml_par (chunks=4) | 100,000 | 0.009 | 0.008 | 0.010 | 32.7% | 11,457,457 | 1,528.5 |
+| plain 100,000 | read_xml_par (chunks=8) | 100,000 | 0.008 | 0.008 | 0.009 | 16.9% | 11,856,492 | 1,581.8 |
+| plain 100,000 | read_xml_par (chunks=12) | 100,000 | 0.007 | 0.006 | 0.007 | 18.3% | 14,225,461 | 1,897.8 |
+| plain 100,000 | iter_xml_batches_par (threads=1) | 100,000 | 0.029 | 0.027 | 0.061 | 116.4% | 3,443,029 | 459.3 |
+| plain 100,000 | iter_xml_batches_par (threads=2) | 100,000 | 0.018 | 0.017 | 0.019 | 8.6% | 5,512,820 | 735.5 |
+| plain 100,000 | iter_xml_batches_par (threads=4) | 100,000 | 0.012 | 0.011 | 0.013 | 18.7% | 8,589,289 | 1,145.9 |
+| plain 100,000 | iter_xml_batches_par (threads=8) | 100,000 | 0.010 | 0.008 | 0.011 | 21.7% | 10,227,970 | 1,364.5 |
+| plain 100,000 | iter_xml_batches_par (threads=12) | 100,000 | 0.011 | 0.009 | 0.012 | 23.6% | 9,182,742 | 1,225.1 |
+| cdata 50,000 | read_xml | 50,000 | 0.020 | 0.019 | 0.021 | 5.3% | 2,465,036 | 1,163.1 |
+| cdata 50,000 | read_xml_stream (64MiB) | 50,000 | 0.023 | 0.020 | 0.028 | 35.8% | 2,133,036 | 1,006.5 |
+| cdata 50,000 | read_xml_par (chunks=1) | 50,000 | 0.020 | 0.019 | 0.023 | 22.2% | 2,547,574 | 1,202.1 |
+| cdata 50,000 | read_xml_par (chunks=2) | 50,000 | 0.012 | 0.011 | 0.017 | 52.4% | 4,237,427 | 1,999.5 |
+| cdata 50,000 | read_xml_par (chunks=4) | 50,000 | 0.019 | 0.015 | 0.028 | 69.0% | 2,579,253 | 1,217.0 |
+| cdata 50,000 | read_xml_par (chunks=8) | 50,000 | 0.016 | 0.012 | 0.024 | 69.6% | 3,107,020 | 1,466.1 |
+| cdata 50,000 | read_xml_par (chunks=12) | 50,000 | 0.014 | 0.012 | 0.015 | 20.7% | 3,694,544 | 1,743.3 |
+| cdata 50,000 | iter_xml_batches_par (threads=1) | 50,000 | 0.030 | 0.030 | 0.052 | 74.3% | 1,648,753 | 778.0 |
+| cdata 50,000 | iter_xml_batches_par (threads=2) | 50,000 | 0.020 | 0.020 | 0.022 | 12.6% | 2,485,106 | 1,172.6 |
+| cdata 50,000 | iter_xml_batches_par (threads=4) | 50,000 | 0.018 | 0.017 | 0.019 | 9.2% | 2,795,459 | 1,319.1 |
+| cdata 50,000 | iter_xml_batches_par (threads=8) | 50,000 | 0.016 | 0.016 | 0.020 | 29.5% | 3,054,418 | 1,441.2 |
+| cdata 50,000 | iter_xml_batches_par (threads=12) | 50,000 | 0.020 | 0.015 | 0.027 | 62.5% | 2,444,472 | 1,153.4 |
+| plain 128 MiB | read_xml | 951,898 | 0.238 | 0.227 | 0.246 | 8.0% | 4,004,947 | 538.1 |
+| plain 128 MiB | read_xml_stream (64MiB) | 951,898 | 0.269 | 0.258 | 0.301 | 16.0% | 3,542,237 | 475.9 |
+| plain 128 MiB | read_xml_par (chunks=1) | 951,898 | 0.235 | 0.234 | 0.245 | 4.9% | 4,050,887 | 544.3 |
+| plain 128 MiB | read_xml_par (chunks=2) | 951,898 | 0.059 | 0.055 | 0.063 | 14.9% | 16,186,337 | 2,174.7 |
+| plain 128 MiB | read_xml_par (chunks=4) | 951,898 | 0.062 | 0.055 | 0.068 | 21.9% | 15,435,906 | 2,073.9 |
+| plain 128 MiB | read_xml_par (chunks=8) | 951,898 | 0.059 | 0.054 | 0.067 | 22.1% | 16,224,631 | 2,179.9 |
+| plain 128 MiB | read_xml_par (chunks=12) | 951,898 | 0.056 | 0.054 | 0.062 | 14.5% | 16,887,377 | 2,268.9 |
+| plain 128 MiB | iter_xml_batches_par (threads=1) | 951,898 | 0.281 | 0.275 | 0.561 | 102.0% | 3,390,334 | 455.5 |
+| plain 128 MiB | iter_xml_batches_par (threads=2) | 951,898 | 0.162 | 0.156 | 0.166 | 5.9% | 5,893,691 | 791.9 |
+| plain 128 MiB | iter_xml_batches_par (threads=4) | 951,898 | 0.108 | 0.108 | 0.109 | 1.0% | 8,785,941 | 1,180.5 |
+| plain 128 MiB | iter_xml_batches_par (threads=8) | 951,898 | 0.090 | 0.088 | 0.093 | 5.4% | 10,554,746 | 1,418.1 |
+| plain 128 MiB | iter_xml_batches_par (threads=12) | 951,898 | 0.088 | 0.079 | 0.095 | 17.8% | 10,857,375 | 1,458.8 |

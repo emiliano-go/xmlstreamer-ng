@@ -6,6 +6,8 @@
 """
 
 import argparse
+import contextlib
+import io
 import platform
 import sys
 from datetime import date
@@ -52,11 +54,7 @@ def _dist_version(name: str) -> str:
         return version("xmlstreamer-ng")
 
 
-def main() -> None:
-    arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--quick", action="store_true")
-    args = arg_parser.parse_args()
-
+def _run(args: argparse.Namespace) -> None:
     print("# xmlstreamer benchmarks\n")
     print(
         f"Date: {date.today().isoformat()} | CPU: {_cpu_model()} | "
@@ -71,15 +69,21 @@ def main() -> None:
     if args.quick:
         print("\nMode: --quick (smoke sizes; numbers are NOT representative)")
 
-    print("\n## Speed (parse-only, same in-memory bytes, best of N)\n")
+    print(
+        "\n## Speed (parse-only, same in-memory bytes, median of N rounds)\n"
+    )
     speed_rows = []
     for r in run_speed(quick=args.quick):
         speed_rows.append([
             r["feed"], _label(r["parser"]), f"{r['items']:,}",
-            f"{r['seconds']:.3f}", f"{r['rate']:,.0f}",
+            f"{r['seconds']:.3f}", f"{r['best_seconds']:.3f}",
+            f"{r['p95_seconds']:.3f}", f"{r['spread']:.1f}%",
+            f"{r['rate']:,.0f}",
         ])
     print(markdown_table(
-        ["feed", "parser", "items", "seconds", "items/s"], speed_rows
+        ["feed", "parser", "items", "median s", "best s", "p95 s",
+         "spread", "items/s (median)"],
+        speed_rows,
     ))
 
     print("\n## Peak memory (one subprocess per parser, RSS)\n")
@@ -122,7 +126,7 @@ def main() -> None:
                 f"{r['seconds']:.3f}", f"{r['rate']:,.0f}", f"{r['mbps']:,.1f}",
             ])
         print(markdown_table(
-            ["feed", "parser", "items", "seconds", "items/s", "MB/s"],
+            ["feed", "parser", "items", "best s", "items/s", "MB/s"],
             native_rows,
         ))
         print(
@@ -138,6 +142,21 @@ def main() -> None:
             "skipped: native binaries not built "
             "(run benchmarks/native/build_native.sh to enable)"
         )
+
+
+def main() -> None:
+    arg_parser = argparse.ArgumentParser()
+    arg_parser.add_argument("--quick", action="store_true")
+    arg_parser.add_argument("--out", metavar="FILE")
+    args = arg_parser.parse_args()
+
+    buffer = io.StringIO()
+    with contextlib.redirect_stdout(buffer):
+        _run(args)
+    text = buffer.getvalue()
+    print(text, end="")
+    if args.out:
+        Path(args.out).write_text(text)
 
 
 if __name__ == "__main__":

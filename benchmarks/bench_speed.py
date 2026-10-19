@@ -1,6 +1,7 @@
 """Parse-only throughput: every parser gets the same in-memory bytes,
-best of N rounds. One extra non-comparative row measures xmlstreamer's
-full pipeline over HTTP loopback (download + encoding detection)."""
+median of N interleaved rounds (best and p95 reported too). One extra
+non-comparative row measures xmlstreamer's full pipeline over HTTP
+loopback (download + encoding detection)."""
 
 import threading
 import time
@@ -10,6 +11,7 @@ from typing import Dict, List
 
 from feeds import cdata_feed, plain_feed
 from parsers import PARSERS
+from stats import summarize
 
 FULL_SIZES = {"plain": 100_000, "cdata": 50_000}
 QUICK_SIZES = {"plain": 2_000, "cdata": 1_000}
@@ -40,22 +42,26 @@ def run_speed(quick: bool = False) -> List[Dict]:
         # Interleave parsers within each round AND rotate who goes first:
         # with monotonic thermal throttling, a fixed order systematically
         # favors whoever runs first in the coldest round.
-        best: Dict[str, float] = {}
+        times: Dict[str, List[float]] = {key: [] for key in PARSERS}
         for round_number in range(rounds):
             shift = round_number % len(parser_list)
             for parser_key, consume in (
                 parser_list[shift:] + parser_list[:shift]
             ):
-                elapsed = _one_run(consume, data)
-                if parser_key not in best or elapsed < best[parser_key]:
-                    best[parser_key] = elapsed
+                times[parser_key].append(_one_run(consume, data))
         for parser_key in PARSERS:
+            timing = summarize(times[parser_key])
+            n_items = sizes[feed_name]
             results.append({
                 "feed": feed_name,
                 "parser": parser_key,
-                "items": sizes[feed_name],
-                "seconds": best[parser_key],
-                "rate": sizes[feed_name] / best[parser_key],
+                "items": n_items,
+                "seconds": timing["median"],
+                "best_seconds": timing["best"],
+                "p95_seconds": timing["p95"],
+                "spread": timing["spread"],
+                "rate": n_items / timing["median"],
+                "best_rate": n_items / timing["best"],
             })
     results.append(_end_to_end(datasets["plain"], sizes["plain"], rounds))
     return results
@@ -90,21 +96,25 @@ def _end_to_end(data: bytes, n_items: int, rounds: int) -> Dict:
             separator_tag="item",
             transport=Transport(download_mode="stream"),
         )
-        best = None
+        times = []
         for _ in range(rounds):
             t0 = time.perf_counter()
             count = sum(1 for _ in interpreter)
             elapsed = time.perf_counter() - t0
             assert count == n_items, f"{count} != {n_items}"
-            if best is None or elapsed < best:
-                best = elapsed
+            times.append(elapsed)
     finally:
         server.shutdown()
         server.server_close()
+    timing = summarize(times)
     return {
         "feed": "plain",
         "parser": "xmlstreamer end-to-end (HTTP)",
         "items": n_items,
-        "seconds": best,
-        "rate": n_items / best,
+        "seconds": timing["median"],
+        "best_seconds": timing["best"],
+        "p95_seconds": timing["p95"],
+        "spread": timing["spread"],
+        "rate": n_items / timing["median"],
+        "best_rate": n_items / timing["best"],
     }

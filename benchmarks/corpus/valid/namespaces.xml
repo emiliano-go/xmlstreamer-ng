@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns:b="urn:books">
+  <item>
+    <b:title>A History of Bridges</b:title>
+    <b:author>A. Smith</b:author>
+    <b:year>1998</b:year>
+  </item>
+  <item>
+    <b:title>Rivers of the World</b:title>
+    <b:author>B. Jones</b:author>
+    <b:year>2004</b:year>
+  </item>
+</feed>
