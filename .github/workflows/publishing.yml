@@ -39,6 +39,10 @@ jobs:
           command: build
           args: --release --out dist --manifest-path native/Cargo.toml
           manylinux: auto
+          # Linux only (macOS/Windows ignore this input): the script builds an
+          # instrumented wheel, trains it, merges the profile and exports
+          # RUSTFLAGS; the action then builds the real wheel in the same shell.
+          before-script-linux: source native/build_pgo_wheel.sh
 
       - name: Upload wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "python")]
 use pyo3::prelude::*;
 #[cfg(feature = "python")]
-use pyo3::types::{PyAny, PyBytes, PyDict, PyList};
+use pyo3::types::{PyAny, PyBytes, PyDict, PyList, PyString};
 
 use rypipe_core::{
     ExecutionPlan, MemoryBudget, ParallelStreamOpts, ParallelStreamingBatchIterator,
@@ -35,6 +35,8 @@ pub mod fuzz_api;
 use parser::XmlParser;
 use splitter::XmlSplitter;
 use stream_parser::{StreamRecord, XmlStreamParser};
+#[cfg(feature = "python")]
+use tokenizer::{blob_fields, Fields};
 
 /// Reject separator tags the XML name rules cannot allow, at the entry
 /// point, exactly like the Python `Tokenizer` does.
@@ -256,6 +258,54 @@ fn last_read_diagnostics(py: Python<'_>) -> Option<Bound<'_, PyDict>> {
     Some(dict)
 }
 
+#[cfg(feature = "python")]
+const KEY_CACHE_SLOTS: usize = 512;
+
+/// Fixed-size, direct-mapped cache of Python field-name strings.
+///
+/// Field names repeat across every item, and `PyString::intern` allocates a
+/// temporary `PyUnicode` on every call (it is slower than `PyString::new` by
+/// design). Hashing the short name in Rust and reusing the `PyString` removes
+/// both costs. Collisions simply evict, which is fine for a schema-shaped key
+/// set.
+#[cfg(feature = "python")]
+struct KeyCache {
+    slots: Vec<Option<(Box<str>, Py<PyString>)>>,
+}
+
+#[cfg(feature = "python")]
+impl KeyCache {
+    fn new() -> Self {
+        Self {
+            slots: std::iter::repeat_with(|| None)
+                .take(KEY_CACHE_SLOTS)
+                .collect(),
+        }
+    }
+
+    fn get(&mut self, py: Python<'_>, name: &str) -> Py<PyString> {
+        let idx = (key_hash(name.as_bytes()) as usize) % KEY_CACHE_SLOTS;
+        if let Some((cached, value)) = &self.slots[idx] {
+            if &**cached == name {
+                return value.clone_ref(py);
+            }
+        }
+        let created = PyString::new(py, name).unbind();
+        self.slots[idx] = Some((name.into(), created.clone_ref(py)));
+        created
+    }
+}
+
+/// FNV-1a: ample for the short, repeated field names this cache sees.
+#[cfg(feature = "python")]
+fn key_hash(bytes: &[u8]) -> u64 {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for &b in bytes {
+        h = (h ^ b as u64).wrapping_mul(0x100000001b3);
+    }
+    h
+}
+
 /// Incremental item stream: the rypipe `RecordStream` driver over the
 /// xmlstreamer scanner. `feed` pushes bytes; `next_item` returns
 /// `(2, item)`, `(1, None)` for need-more, `(0, None)` for EOF.
@@ -265,6 +315,7 @@ struct RecordStream {
     inner: CoreRecordStream<XmlStreamParser>,
     diag: Arc<DiagSink>,
     queue: VecDeque<StreamRecord>,
+    keys: KeyCache,
     /// Hard caps for a hostile or endless feed; `None` disables the cap.
     max_bytes: Option<u64>,
     max_items: Option<u64>,
@@ -309,6 +360,7 @@ impl RecordStream {
             )),
             diag: Arc::new(DiagSink::default()),
             queue: VecDeque::new(),
+            keys: KeyCache::new(),
             max_bytes,
             max_items,
             bytes_fed: 0,
@@ -379,7 +431,13 @@ impl RecordStream {
     /// `(status, payload, has_logs)`: status 2 carries an item, 1 asks for
     /// more bytes, 0 is EOF. Reporting `has_logs` with the item saves the
     /// Python loop a separate `has_logs()` FFI call per item.
-    fn next_item<'py>(&mut self, py: Python<'py>) -> PyResult<(u8, Py<PyAny>, bool)> {
+    ///
+    /// `want_content=false` lets the scanner skip the raw bytes for dict-only
+    /// consumers; the item tuple is flattened into this return so the stream
+    /// loop pays one FFI crossing and one tuple allocation per item.
+    #[pyo3(signature = (want_content=true))]
+    fn next_item<'py>(&mut self, py: Python<'py>, want_content: bool) -> PyResult<ItemTuple> {
+        self.inner.parser().set_want_content(want_content);
         loop {
             if let Some(record) = self.queue.pop_front() {
                 if let Some(max) = self.max_items {
@@ -389,17 +447,18 @@ impl RecordStream {
                             "MAX_ITEMS",
                             format!("Stopped after {max} items: max_items reached"),
                         );
-                        return Ok((0, py.None(), self.has_logs()));
+                        return Ok((0, py.None(), py.None(), false, py.None(), self.has_logs()));
                     }
                 }
                 self.items_emitted += 1;
-                let item = record_to_py(py, record)?;
-                return Ok((2, item, self.has_logs()));
+                let (content, parsed, replaced, collisions) =
+                    record_to_py(py, record, want_content, &mut self.keys)?;
+                return Ok((2, content, parsed, replaced, collisions, self.has_logs()));
             }
             // The parser can finish on its own (time budget exhausted) while
             // the driver still has bytes to pull: end the iteration there.
             if self.inner.parser().state_eof() {
-                return Ok((0, py.None(), self.has_logs()));
+                return Ok((0, py.None(), py.None(), false, py.None(), self.has_logs()));
             }
             let mut out: Vec<StreamRecord> = Vec::new();
             let state = self
@@ -410,37 +469,69 @@ impl RecordStream {
             let has_queued = !self.queue.is_empty();
             match state {
                 StreamState::Eof if has_queued => continue,
-                StreamState::Eof => return Ok((0, py.None(), self.has_logs())),
+                StreamState::Eof => {
+                    return Ok((0, py.None(), py.None(), false, py.None(), self.has_logs()))
+                }
                 StreamState::NeedMore if has_queued => continue,
                 // A fired cap drains the already-parsed queue, then reports
                 // EOF instead of asking the driver for more bytes.
-                StreamState::NeedMore if self.capped => return Ok((0, py.None(), self.has_logs())),
-                StreamState::NeedMore => return Ok((1, py.None(), self.has_logs())),
+                StreamState::NeedMore if self.capped => {
+                    return Ok((0, py.None(), py.None(), false, py.None(), self.has_logs()))
+                }
+                StreamState::NeedMore => {
+                    return Ok((1, py.None(), py.None(), false, py.None(), self.has_logs()))
+                }
                 StreamState::Rows => continue,
             }
         }
     }
 }
 
+/// `(content, parsed, replaced, collisions)` for one streamed record.
 #[cfg(feature = "python")]
-fn record_to_py(py: Python<'_>, record: StreamRecord) -> PyResult<Py<PyAny>> {
-    let parsed = match record.parsed {
-        Some(tags) => {
+type RecordTuple = (Py<PyAny>, Py<PyAny>, bool, Py<PyAny>);
+/// `(status, content, parsed, replaced, collisions, has_logs)` for one poll.
+#[cfg(feature = "python")]
+type ItemTuple = (u8, Py<PyAny>, Py<PyAny>, bool, Py<PyAny>, bool);
+
+#[cfg(feature = "python")]
+fn record_to_py(
+    py: Python<'_>,
+    record: StreamRecord,
+    want_content: bool,
+    keys: &mut KeyCache,
+) -> PyResult<RecordTuple> {
+    let malformed = record.parsed.is_none();
+    let parsed: Py<PyAny> = match record.parsed {
+        Some(Fields::Blob(buf)) => {
+            let dict = PyDict::new(py);
+            for (name, value) in blob_fields(&buf) {
+                dict.set_item(keys.get(py, name), value)?;
+            }
+            dict.into_any().unbind()
+        }
+        Some(Fields::Owned(tags)) => {
             let dict = PyDict::new(py);
             for (key, value) in tags {
-                dict.set_item(key, value)?;
+                dict.set_item(keys.get(py, &key), value)?;
             }
-            Some(dict.unbind())
+            dict.into_any().unbind()
         }
-        None => None,
+        None => py.None(),
     };
-    let payload = (
-        PyBytes::new(py, &record.content),
-        parsed,
-        record.replaced,
-        record.collisions,
-    );
-    Ok(payload.into_pyobject(py)?.unbind().into_any())
+    // Raw output and the malformed warning are the only consumers of the
+    // bytes; for dict-only items the scanner left the Vec empty.
+    let content: Py<PyAny> = if want_content || malformed {
+        PyBytes::new(py, &record.content).into_any().unbind()
+    } else {
+        py.None()
+    };
+    let collisions: Py<PyAny> = if record.collisions.is_empty() {
+        py.None()
+    } else {
+        PyList::new(py, record.collisions)?.into_any().unbind()
+    };
+    Ok((content, parsed, record.replaced, collisions))
 }
 
 #[cfg(feature = "python")]

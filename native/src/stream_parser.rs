@@ -10,12 +10,12 @@
 
 use rypipe_core::{ParseDiagnostics, Result as RypipeResult, StreamingRecordParser};
 
-use crate::tokenizer::{Engine, Log, Next};
+use crate::tokenizer::{Engine, Fields, Log, Next};
 
 /// One isolated item plus the metadata the Python `ParsedItem` carries.
 pub struct StreamRecord {
     pub content: Vec<u8>,
-    pub parsed: Option<Vec<(String, String)>>,
+    pub parsed: Option<Fields>,
     pub replaced: bool,
     pub collisions: Vec<(String, String, String)>,
 }
@@ -102,6 +102,10 @@ fn report(log: Log, diag: &dyn ParseDiagnostics) {
 
 pub struct XmlStreamParser {
     engine: Engine,
+    /// Set by the Python layer per item request: `false` lets the scanner
+    /// skip the raw-bytes copy for dict-only consumers. Atomic because the
+    /// pyclass requires `Sync`; the parser itself is driven by one thread.
+    want_content: std::sync::atomic::AtomicBool,
 }
 
 impl XmlStreamParser {
@@ -120,7 +124,13 @@ impl XmlStreamParser {
                 on_limit_text,
                 deadline_secs,
             ),
+            want_content: std::sync::atomic::AtomicBool::new(true),
         }
+    }
+
+    pub fn set_want_content(&self, want: bool) {
+        self.want_content
+            .store(want, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn malformed_tags(&self) -> usize {
@@ -148,6 +158,8 @@ impl StreamingRecordParser for XmlStreamParser {
         emit: &mut dyn FnMut(StreamRecord),
         diag: &dyn ParseDiagnostics,
     ) -> RypipeResult<usize> {
+        self.engine
+            .set_want_content(self.want_content.load(std::sync::atomic::Ordering::Relaxed));
         self.engine.feed(bytes);
         if eof {
             self.engine.finish();

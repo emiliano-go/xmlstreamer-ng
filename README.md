@@ -183,7 +183,7 @@ uv run --group bench python benchmarks/bench_corpus.py
 benchmarks/native/build_native.sh
 ```
 
-*Measured 2026-10-19 on a Ryzen 7 5800X, Python 3.13.15, xmlstreamer-ng 2.1.0,
+*Measured 2026-10-20 on a Ryzen 7 5800X, Python 3.13.15, xmlstreamer-ng 2.1.0,
 xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python) 0.3.0.
 Absolute numbers track the machine; the ratios are stable across runs.*
 
@@ -197,23 +197,23 @@ the binaries are not built):
 
 | engine | items/s | MB/s | peak RSS MB | threads | API/notes |
 |---|---|---|---|---|---|
-| xmlstreamer-ng per-item | 567k | 76.2 | 88 | 1 | per-item dicts |
-| XmlSource columnar | 3.9M | 527.6 | 315 | 1 | Arrow batches |
-| XmlSource parallel (8 threads) | 16.5M | 2214.1 | 326 | 8 | Arrow batches, 8 threads |
-| XmlSource bounded parallel streaming | 11.2M | 1501.0 | 214 | 8 | bounded batches, 8 threads |
+| xmlstreamer-ng per-item | 911k | 122.3 | 74 | 1 | per-item dicts |
+| XmlSource columnar | 4.7M | 631.9 | 297 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 16.6M | 2225.9 | 284 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 10.6M | 1430.6 | 202 | 8 | bounded batches, 8 threads |
 | xmlstreamer (original) | 111k | 14.9 | 34 | 1 | per-item dicts |
-| lxml iterparse (count) | 493k | 66.2 | 26 | 1 | iterparse + clear(), no records |
-| stdlib ET iterparse (count) | 339k | 45.6 | 21 | 1 | iterparse + root.clear(), no records |
-| lxml iterparse (dicts) | 334k | 44.9 | 26 | 1 | per-item dicts |
-| stdlib ET iterparse (dicts) | 308k | 41.4 | 21 | 1 | per-item dicts |
-| xmltodict | 101k | 13.5 | 469 | 1 | whole-document dict |
-| simdxml (Python) | 506k | 67.9 | 1066 | 1 | per-item dicts, whole-doc parse |
-| simdxml parallel (Python) | 531k | 71.4 | 1067 | 16 | per-item dicts, parallel SIMD parse |
-| quick-xml 0.37.5 | 3.2M | 429.9 | 14 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.7M | 234.0 | 730 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.3M | 308.2 | 773 | 1 | parse+count only, no data |
+| lxml iterparse (count) | 503k | 67.5 | 26 | 1 | iterparse + clear(), no records |
+| stdlib ET iterparse (count) | 350k | 47.0 | 21 | 1 | iterparse + root.clear(), no records |
+| lxml iterparse (dicts) | 338k | 45.5 | 26 | 1 | per-item dicts |
+| stdlib ET iterparse (dicts) | 317k | 42.6 | 21 | 1 | per-item dicts |
+| xmltodict | 107k | 14.4 | 469 | 1 | whole-document dict |
+| simdxml (Python) | 527k | 70.8 | 1062 | 1 | per-item dicts, whole-doc parse |
+| simdxml parallel (Python) | 545k | 73.2 | 1066 | 16 | per-item dicts, parallel SIMD parse |
+| quick-xml 0.37.5 | 3.3M | 449.3 | 14 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.7M | 222.1 | 730 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.2M | 289.6 | 772 | 1 | parse+count only, no data |
 
-*Measured 2026-10-19 on a Ryzen 7 5800X, Python 3.13.15, xmlstreamer-ng 2.1.0,
+*Measured 2026-10-20 on a Ryzen 7 5800X, Python 3.13.15, xmlstreamer-ng 2.1.0,
 xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python)
 0.3.0, pyarrow 26.0.0; native rows are speed-only references (parse and
 count, no encoding detection, recovery contract, or data materialization),
@@ -236,13 +236,13 @@ in-memory bytes, median of N interleaved rounds:
 
 | feed | xmlstreamer-ng | xmlstreamer (original) | lxml iterparse (recover=True) | stdlib ET iterparse | xmltodict | simdxml (Rust engine) |
 |---|---|---|---|---|---|---|
-| flat items | 668k items/s | 109k | 322k | 301k | 104k | 653k |
-| CDATA-heavy | 544k items/s | 87k | 202k | 268k | 99k | 531k |
+| flat items | 822k items/s | 101k | 322k | 301k | 104k | 653k |
+| CDATA-heavy | 607k items/s | 81k | 202k | 268k | 99k | 531k |
 
 The simdxml rows parse the whole document in memory before extracting
 records, so they buy their speed with ~1 GB peak RSS on the 128 MiB feed
 (see the consolidated table) and no streaming contract. The fork is
-~6.1x (flat) to ~6.3x (CDATA) faster than the original package it
+~8.1x (flat) to ~7.5x (CDATA) faster than the original package it
 replaces, at the same recovery contract.
 
 **Columnar / parallel adapter, multiple threads.** The adapter paths are
@@ -251,13 +251,10 @@ bounded streaming) and the same 128 MiB feed. Full table:
 [docs/benchmarks/adapter.md](docs/benchmarks/adapter.md). The original
 xmlstreamer has no columnar or parallel API, so it cannot appear there.
 
-In that run the adapter is roughly 12x stdlib single-threaded (`read_xml` vs
-stdlib ET, both building records) and ~48x in parallel; a projection that lets
-the scanner skip unwanted fields costs ~10-15% in this run (on other feeds and
-CPUs the projection win is larger - it depends on how much of each item is
-skipped). Parallel and bounded modes are where the engine pays off; the
-per-item API is for feeds that arrive over the network or need the recovery
-contract.
+In that run the adapter is roughly 14x stdlib single-threaded (`read_xml` vs
+stdlib ET, both building records) and ~50x in parallel. Parallel and bounded
+modes are where the engine pays off; the per-item API is for feeds that arrive
+over the network or need the recovery contract.
 
 **Adapter scaling.** Same feeds, swept over thread counts (crxml-style
 table, best of 3, full numbers in
@@ -293,11 +290,13 @@ about 1.2x quick-xml's raw parse speed while also building the Arrow
 table; `read_xml_par` (chunks=2-8) exceeds every single-threaded native
 counter in MB/s.
 
-**Optional profile-guided build.** `native/build_pgo.sh` builds a two-stage
-profile-guided release (the default wheel is unchanged); its trainer exercises
-the columnar, streaming, parallel and per-item paths. On the same machine and
-feed the PGO build lifts every path (the default column is that build run's
-own baseline, not the consolidated table above):
+**Profile-guided build.** Linux x86_64 release wheels are PGO-built;
+`native/build_pgo.sh` builds the same two-stage profile-guided release for a
+local install, and the other platforms' wheels keep the portable default. The
+trainer exercises the columnar, streaming, parallel and per-item paths. The
+tables above were measured on this build. On the same machine and feed the PGO
+build lifts every path (the default column is that build run's own baseline,
+not the consolidated table above):
 
 | path | default | PGO |
 |---|---|---|
@@ -310,15 +309,17 @@ On the dedicated quick-xml head-to-head the PGO build reaches ~1.5x to ~1.6x on
 the flat feed and ~1.25x to ~1.35x on CDATA-heavy feeds, across both `read_xml`
 and `read_xml_stream`. Regenerate with:
 `native/build_pgo.sh .venv/bin/python benchmarks/pgo_train.py --mb 8`.
+Local builds can also pass `RUSTFLAGS="-C target-cpu=native"` (the script
+preserves it); published wheels stay on a portable baseline.
 
 **Peak memory.** Each parser processes the same 121 MB feed alone, in a fresh
 subprocess, and reports its peak RSS - measured by the kernel, not estimated.
 
 | parser | peak RSS |
 |---|---|
-| xmlstreamer-ng per-item | 87 MB |
+| xmlstreamer-ng per-item | 72 MB |
 | xmlstreamer (original) per-item | 32 MB |
-| XmlSource bounded streaming | 214 MB |
+| XmlSource bounded streaming | 202 MB |
 | lxml iterparse | 24 MB |
 | stdlib ET iterparse | 17 MB |
 | xmltodict (streaming mode) | 22 MB |
@@ -327,7 +328,7 @@ subprocess, and reports its peak RSS - measured by the kernel, not estimated.
 Encoding detection only runs when the first 64 KiB are not already valid UTF-8,
 so the common case never pays for it. All streaming parsers stay flat as the
 feed grows; the original package peaks lowest because its per-item Python dicts
-are transient, while xmlstreamer-ng's 87 MB carries the Rust engine plus
+are transient, while xmlstreamer-ng's 72 MB carries the Rust engine plus
 Python-level plumbing. The bounded modes stay flat as the feed grows; the
 columnar/parallel modes hold the materialized table.
 

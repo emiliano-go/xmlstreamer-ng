@@ -10,27 +10,96 @@
 
 use crate::xml;
 
-/// Collects the fields of one item into the owned `(key, value)` pairs the
-/// streaming record carries across the FFI boundary. Numbering collisions
+/// The fields of one item, in the form the Python side consumes.
+///
+/// The fast paths emit borrowed `&str`s; storing owned `(String, String)`
+/// pairs made every field pay two allocations at the boundary. `Blob` packs
+/// `[u32 name_len][u32 value_len][name][value]` records into one buffer, so
+/// the dict is built from slices. `Owned` remains for the wrapped-document
+/// fallback, whose fields point into a temporary document.
+pub enum Fields {
+    Blob(Vec<u8>),
+    Owned(Vec<(String, String)>),
+}
+
+impl Fields {
+    pub fn is_empty(&self) -> bool {
+        match self {
+            Fields::Blob(buf) => buf.is_empty(),
+            Fields::Owned(pairs) => pairs.is_empty(),
+        }
+    }
+
+    /// The item's only field, if it has exactly one: the empty-item check
+    /// needs that shape.
+    pub fn sole_field(&self) -> Option<(&str, &str)> {
+        match self {
+            Fields::Blob(buf) => {
+                let mut it = blob_fields(buf);
+                let first = it.next()?;
+                if it.next().is_some() {
+                    return None;
+                }
+                Some(first)
+            }
+            Fields::Owned(pairs) if pairs.len() == 1 => {
+                Some((pairs[0].0.as_str(), pairs[0].1.as_str()))
+            }
+            Fields::Owned(_) => None,
+        }
+    }
+}
+
+const FIELD_HEADER: usize = 8;
+
+/// Collects one item's fields into `Fields::Blob` form. Numbering collisions
 /// are recorded on the `Scratch`, not here.
 #[derive(Default)]
 pub struct FieldCollector {
-    pub fields: Vec<(String, String)>,
+    pub buf: Vec<u8>,
 }
 
 impl xml::FlatEmitter for FieldCollector {
     #[inline]
     fn row_start(&mut self) {
-        // One vec allocation per item, not a grow chain: field counts are
-        // small and stable within a feed.
-        self.fields.reserve(8);
+        self.buf.clear();
+        self.buf.reserve(128);
     }
     #[inline]
     fn row_end(&mut self) {}
     #[inline]
     fn field(&mut self, name: &str, value: &str) {
-        self.fields.push((name.to_string(), value.to_string()));
+        self.buf
+            .extend_from_slice(&(name.len() as u32).to_le_bytes());
+        self.buf
+            .extend_from_slice(&(value.len() as u32).to_le_bytes());
+        self.buf.extend_from_slice(name.as_bytes());
+        self.buf.extend_from_slice(value.as_bytes());
     }
+}
+
+/// Walk the records `FieldCollector` packed. A truncated tail ends the walk:
+/// the producer is internal, so this only guards against logic drift.
+pub fn blob_fields<'a>(mut buf: &'a [u8]) -> impl Iterator<Item = (&'a str, &'a str)> + 'a {
+    std::iter::from_fn(move || {
+        if buf.len() < FIELD_HEADER {
+            return None;
+        }
+        let nl = u32::from_le_bytes(buf[..4].try_into().ok()?) as usize;
+        let vl = u32::from_le_bytes(buf[4..8].try_into().ok()?) as usize;
+        let rest = &buf[FIELD_HEADER..];
+        if nl + vl > rest.len() {
+            buf = &[];
+            return None;
+        }
+        let (name, tail) = rest.split_at(nl);
+        let (value, tail) = tail.split_at(vl);
+        buf = tail;
+        Some((
+            std::str::from_utf8(name).unwrap_or(""),
+            std::str::from_utf8(value).unwrap_or(""),
+        ))
+    })
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -55,7 +124,7 @@ pub enum Next {
 
 pub struct PendingItem {
     pub content: Vec<u8>,
-    pub parsed: Option<Vec<(String, String)>>,
+    pub parsed: Option<Fields>,
     pub replaced: bool,
     pub collisions: Vec<(String, String, String)>,
 }
@@ -102,6 +171,12 @@ const LONGEST_SECTION_PREFIX: usize = 9;
 pub struct Engine {
     sep: Vec<u8>,
     sep_str: String,
+    /// `<` + separator, built once: the per-item nested-tag probe used to
+    /// allocate this needle for every item.
+    nested_needle: Vec<u8>,
+    /// Whether the item's raw bytes are wanted by the consumer. When false
+    /// (the dict-only streaming path) complete items skip the content copy.
+    want_content: bool,
     buffer: Vec<u8>,
     eof_input: bool,
 
@@ -149,9 +224,15 @@ impl Engine {
             let secs = if s.is_nan() { 0.0 } else { s.clamp(0.0, 1.0e9) };
             std::time::Instant::now().checked_add(std::time::Duration::from_secs_f64(secs))
         });
+        let sep = separator_tag.as_bytes().to_vec();
+        let mut nested_needle = Vec::with_capacity(sep.len() + 1);
+        nested_needle.push(b'<');
+        nested_needle.extend_from_slice(&sep);
         Engine {
-            sep: separator_tag.as_bytes().to_vec(),
+            sep,
             sep_str: separator_tag.to_string(),
+            nested_needle,
+            want_content: true,
             buffer: Vec::new(),
             eof_input: false,
             pos: 0,
@@ -198,6 +279,11 @@ impl Engine {
 
     pub fn malformed_tags(&self) -> usize {
         self.malformed_tags
+    }
+
+    /// Tell the scanner whether the consumer needs the item's raw bytes.
+    pub fn set_want_content(&mut self, want: bool) {
+        self.want_content = want;
     }
 
     pub fn take_logs(&mut self) -> Vec<Log> {
@@ -267,11 +353,11 @@ impl Engine {
                         self.check_delimiter(&closing, xml::end_tag_is_well_formed);
                     }
                     let content_start = self.pos;
-                    let content: Vec<u8> = self.buffer[content_start..m.start].to_vec();
+                    let item = &self.buffer[content_start..m.start];
                     self.pos = m.end;
                     self.scan = m.end;
 
-                    if content.is_empty() || content.iter().all(|&b| is_ws(b)) {
+                    if item.is_empty() || item.iter().all(|&b| is_ws(b)) {
                         self.state = State::SeekOpen;
                         return Flow::Continue;
                     }
@@ -282,7 +368,7 @@ impl Engine {
                     // parser so behavior stays byte-for-byte what it was.
                     let mut collector = FieldCollector::default();
                     let mut ignored_malformed = 0u64;
-                    let outcome = if has_nested_separator(&content, &self.sep) {
+                    let outcome = if has_nested_separator(item, &self.nested_needle) {
                         xml::Fused::Malformed
                     } else {
                         xml::parse_item_fused(
@@ -298,25 +384,32 @@ impl Engine {
                     };
                     let (parsed, replaced, collisions) = match outcome {
                         xml::Fused::Complete { .. } => {
-                            if collector.fields.is_empty() {
+                            if collector.buf.is_empty() {
                                 self.state = State::SeekOpen;
                                 return Flow::Continue;
                             }
-                            let replaced = std::str::from_utf8(&content).is_err();
+                            let replaced = std::str::from_utf8(item).is_err();
                             let collisions = std::mem::take(&mut self.scratch.collisions);
-                            (Some(collector.fields), replaced, collisions)
+                            (Some(Fields::Blob(collector.buf)), replaced, collisions)
                         }
-                        _ => parse_wrapped(&content, &self.sep),
+                        _ => parse_wrapped(item, &self.sep),
                     };
-                    if let Some(ref p) = parsed {
-                        let only_wrapper = p.len() == 1
-                            && p[0].0.as_bytes() == self.sep.as_slice()
-                            && p[0].1.trim().is_empty();
-                        if p.is_empty() || only_wrapper {
+                    if let Some(fields) = &parsed {
+                        let only_wrapper = fields.sole_field().is_some_and(|(name, value)| {
+                            name == self.sep_str.as_str() && value.trim().is_empty()
+                        });
+                        if fields.is_empty() || only_wrapper {
                             self.state = State::SeekOpen;
                             return Flow::Continue;
                         }
                     }
+                    // Raw output and the malformed warning need the item's
+                    // bytes; the dict-only path does not, so skip the copy.
+                    let content = if self.want_content || parsed.is_none() {
+                        item.to_vec()
+                    } else {
+                        Vec::new()
+                    };
                     self.pending = Some(PendingItem {
                         content,
                         parsed,
@@ -781,12 +874,9 @@ impl Engine {
 /// contract rejects those, and the legacy wrapped-document parser (whose
 /// extra closing tag unbalances any nested separator element) is the
 /// authority on the outcome, so the fast path stands down.
-fn has_nested_separator(content: &[u8], sep: &[u8]) -> bool {
-    let mut needle = Vec::with_capacity(sep.len() + 1);
-    needle.push(b'<');
-    needle.extend_from_slice(sep);
+fn has_nested_separator(content: &[u8], needle: &[u8]) -> bool {
     let mut search = 0;
-    while let Some(r) = memchr::memmem::find(&content[search..], &needle) {
+    while let Some(r) = memchr::memmem::find(&content[search..], needle) {
         let p = search + r;
         match content.get(p + needle.len()) {
             Some(b'>') | Some(b'/') => return true,
@@ -799,11 +889,7 @@ fn has_nested_separator(content: &[u8], sep: &[u8]) -> bool {
 
 /// `(parsed fields, text was replaced, collisions)`, where a collision is
 /// `(path, first occurrence, second occurrence)` reported by the fallback.
-type WrappedParse = (
-    Option<Vec<(String, String)>>,
-    bool,
-    Vec<(String, String, String)>,
-);
+type WrappedParse = (Option<Fields>, bool, Vec<(String, String, String)>);
 
 fn parse_wrapped(content: &[u8], sep: &[u8]) -> WrappedParse {
     let mut doc = Vec::with_capacity(content.len() + 2 * sep.len() + 5);
@@ -817,7 +903,11 @@ fn parse_wrapped(content: &[u8], sep: &[u8]) -> WrappedParse {
     let replaced = std::str::from_utf8(&doc).is_err();
     let lossy = String::from_utf8_lossy(&doc);
     let result = xml::parse_document(lossy.as_bytes());
-    (result.parsed, replaced, result.collisions)
+    (
+        result.parsed.map(Fields::Owned),
+        replaced,
+        result.collisions,
+    )
 }
 
 fn starts_with(buf: &[u8], start: usize, prefix: &[u8]) -> bool {

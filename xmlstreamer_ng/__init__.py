@@ -1254,9 +1254,21 @@ class Tokenizer:
             # Python warnings byte for byte.
             logger.warning("%s", message)
 
-    def get_item(self) -> ParsedItem | None:
+    def _poll(self, want_content: bool = True) -> tuple[bytes | None, Any, bool] | None:
+        """
+        Pump the engine to the next item, logging engine events, key
+        collisions and malformed items on the way. Returns
+        ``(content, parsed, replaced)`` or ``None`` at EOF. Shared by
+        ``get_item`` and ``FeedRun`` so the ``ParsedItem`` wrapper is
+        only paid for where it is actually used.
+
+        ``want_content=False`` skips the raw-bytes copy for dict-only
+        consumers; malformed items always carry their bytes.
+        """
         while True:
-            code, payload, has_logs = self._engine.next_item()
+            code, content, parsed, replaced, collisions, has_logs = (
+                self._engine.next_item(want_content)
+            )
             if has_logs:
                 self._log_engine_events()
 
@@ -1282,28 +1294,35 @@ class Tokenizer:
                     fed += len(chunk)
                 continue
 
-            content, parsed, replaced, collisions = payload
-            for taken, tag, key in collisions:
-                logger.warning(
-                    "Key collision on %r: <%s> numbered as %r instead. A "
-                    "field named like a numbered sibling makes the shape "
-                    "ambiguous.",
-                    taken, tag, key,
-                )
+            if collisions:
+                for taken, tag, key in collisions:
+                    logger.warning(
+                        "Key collision on %r: <%s> numbered as %r instead. A "
+                        "field named like a numbered sibling makes the shape "
+                        "ambiguous.",
+                        taken, tag, key,
+                    )
             if parsed is None:
                 wrapper = f"<{self.separator_tag}>".encode()
                 closing = f"</{self.separator_tag}>".encode()
                 logger.warning(
                     "Discarding unparseable item (%s): %r",
                     "malformed XML",
-                    (wrapper + bytes(content) + closing)[:120],
+                    (wrapper + content + closing)[:120],
                 )
-            self.actual_item = ParsedItem(
-                content=bytes(content),
-                parsed_content=parsed,
-                replaced=replaced,
-            )
-            return self.actual_item
+            return content, parsed, replaced
+
+    def get_item(self) -> ParsedItem | None:
+        polled = self._poll()
+        if polled is None:
+            return None
+        content, parsed, replaced = polled
+        self.actual_item = ParsedItem(
+            content=content,
+            parsed_content=parsed,
+            replaced=replaced,
+        )
+        return self.actual_item
 
 
 class FeedRun(Generic[ItemT]):
@@ -1361,7 +1380,7 @@ class FeedRun(Generic[ItemT]):
     def __next__(self) -> ItemT:
         if self._finished:
             raise StopIteration
-        if self.check_terminate() is True:
+        if self._budget is not None and self.check_terminate() is True:
             logger.warning("> XMLStreamer > Get item (RUNTIME EXCEEDED)")
             self.finish()
 
@@ -1428,38 +1447,47 @@ class FeedRun(Generic[ItemT]):
         # The end is re-read after anything that reaches caller code
         # (the scan and its logging, the filter): once a run is over,
         # no counter moves again.
-        while not self._finished\
-                and self.tokenizer.PARSING_STATE != ParsingState.EOF:
+        while not self._finished:
             # Checked here too: a filter that drops everything never
-            # reaches __next__, and the budget must still hold.
-            if self.check_terminate() is True:
+            # reaches __next__, and the budget must still hold. Skipped
+            # outright when there is no budget: the common case.
+            if self._budget is not None and self.check_terminate() is True:
                 self.finish()
 
-            item: ParsedItem | None = self.tokenizer.get_item()
+            # The lean tokenizer path: no ParsedItem wrapper, no extra
+            # feed layer. Content only reaches the caller in Raw mode, so
+            # everything else lets the scanner skip the copy.
+            want_content = isinstance(interpreter.OUTPUT, Raw)
+            polled: tuple[bytes | None, Any, bool] | None = self.tokenizer._poll(
+                want_content
+            )
+            if polled is None:
+                break  # EOF: nothing more will come
+
             if self._finished:
                 break  # closed from inside the scan
 
-            if item is not None:
-                self.stats_total_items += 1
-                if item.parsed_content is not None:
-                    self.stats_parsed_items += 1
-                if item.replaced:
-                    self._replaced_items += 1
-                    if self._replaced_items == 1:
-                        # Counted before warning: this line reaches
-                        # caller code, which can close the run from it.
-                        logger.warning(
-                            "Invalid utf-8 in the feed: those bytes are "
-                            "replaced with U+FFFD. The encoding detected "
-                            "from the head of the feed does not match "
-                            "what arrived later."
-                        )
-                        if self._finished:
-                            break
+            content, parsed, replaced = polled
+            self.stats_total_items += 1
+            if parsed is not None:
+                self.stats_parsed_items += 1
+            if replaced:
+                self._replaced_items += 1
+                if self._replaced_items == 1:
+                    # Counted before warning: this line reaches
+                    # caller code, which can close the run from it.
+                    logger.warning(
+                        "Invalid utf-8 in the feed: those bytes are "
+                        "replaced with U+FFFD. The encoding detected "
+                        "from the head of the feed does not match "
+                        "what arrived later."
+                    )
+                    if self._finished:
+                        break
 
-            if item is not None and item.parsed_content is not None:
+            if parsed is not None:
                 if interpreter.ITEM_FILTER is None\
-                        or interpreter.ITEM_FILTER(item.parsed_content):
+                        or interpreter.ITEM_FILTER(parsed):
                     if self._finished:
                         break  # the filter closed the run: nothing more
                     self.stats_delivered_items += 1
@@ -1468,13 +1496,13 @@ class FeedRun(Generic[ItemT]):
                     # state what the __init__ overloads pinned: Raw
                     # yields bytes, everything else dicts.
                     if isinstance(interpreter.OUTPUT, Raw):
-                        return cast(ItemT, item.content)
+                        return cast(ItemT, content)
                     if interpreter.OUTPUT is not None:
                         return cast(ItemT, to_nested(
-                            item.parsed_content,
+                            parsed,
                             interpreter.OUTPUT.force_list
                         ))
-                    return cast(ItemT, item.parsed_content)
+                    return cast(ItemT, parsed)
 
         self.finish()
 
