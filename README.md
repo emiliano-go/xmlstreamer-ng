@@ -197,21 +197,21 @@ the binaries are not built):
 
 | engine | items/s | MB/s | peak RSS MB | threads | API/notes |
 |---|---|---|---|---|---|
-| xmlstreamer-ng per-item | 911k | 122.3 | 74 | 1 | per-item dicts |
-| XmlSource columnar | 4.7M | 631.9 | 297 | 1 | Arrow batches |
-| XmlSource parallel (8 threads) | 16.6M | 2225.9 | 284 | 8 | Arrow batches, 8 threads |
-| XmlSource bounded parallel streaming | 10.6M | 1430.6 | 202 | 8 | bounded batches, 8 threads |
-| xmlstreamer (original) | 111k | 14.9 | 34 | 1 | per-item dicts |
-| lxml iterparse (count) | 503k | 67.5 | 26 | 1 | iterparse + clear(), no records |
-| stdlib ET iterparse (count) | 350k | 47.0 | 21 | 1 | iterparse + root.clear(), no records |
-| lxml iterparse (dicts) | 338k | 45.5 | 26 | 1 | per-item dicts |
-| stdlib ET iterparse (dicts) | 317k | 42.6 | 21 | 1 | per-item dicts |
-| xmltodict | 107k | 14.4 | 469 | 1 | whole-document dict |
-| simdxml (Python) | 527k | 70.8 | 1062 | 1 | per-item dicts, whole-doc parse |
-| simdxml parallel (Python) | 545k | 73.2 | 1066 | 16 | per-item dicts, parallel SIMD parse |
-| quick-xml 0.37.5 | 3.3M | 449.3 | 14 | 1 | parse+count only, no data |
-| simdxml 0.2.1 (git) | 1.7M | 222.1 | 730 | 1 | parse+count only, no data |
-| pugixml 1.15 | 2.2M | 289.6 | 772 | 1 | parse+count only, no data |
+| xmlstreamer-ng per-item | 917k | 123.2 | 73 | 1 | per-item dicts |
+| XmlSource columnar | 4.6M | 621.6 | 297 | 1 | Arrow batches |
+| XmlSource parallel (8 threads) | 15.8M | 2122.6 | 283 | 8 | Arrow batches, 8 threads |
+| XmlSource bounded parallel streaming | 10.2M | 1364.7 | 202 | 8 | bounded batches, 8 threads |
+| xmlstreamer (original) | 103k | 13.8 | 34 | 1 | per-item dicts |
+| lxml iterparse (count) | 448k | 60.2 | 26 | 1 | iterparse + clear(), no records |
+| stdlib ET iterparse (count) | 318k | 42.7 | 21 | 1 | iterparse + root.clear(), no records |
+| lxml iterparse (dicts) | 304k | 40.8 | 26 | 1 | per-item dicts |
+| stdlib ET iterparse (dicts) | 280k | 37.6 | 21 | 1 | per-item dicts |
+| xmltodict | 100k | 13.4 | 469 | 1 | whole-document dict |
+| simdxml (Python) | 496k | 66.6 | 1067 | 1 | per-item dicts, whole-doc parse |
+| simdxml parallel (Python) | 505k | 67.8 | 1065 | 16 | per-item dicts, parallel SIMD parse |
+| quick-xml 0.37.5 | 3.2M | 433.0 | 14 | 1 | parse+count only, no data |
+| simdxml 0.2.1 (git) | 1.6M | 211.3 | 730 | 1 | parse+count only, no data |
+| pugixml 1.15 | 2.0M | 264.9 | 772 | 1 | parse+count only, no data |
 
 *Measured 2026-10-20 on a Ryzen 7 5800X, Python 3.13.15, xmlstreamer-ng 2.1.0,
 xmlstreamer (original) 2.2.0, lxml 6.1.3, xmltodict 1.0.4, simdxml (Python)
@@ -236,13 +236,13 @@ in-memory bytes, median of N interleaved rounds:
 
 | feed | xmlstreamer-ng | xmlstreamer (original) | lxml iterparse (recover=True) | stdlib ET iterparse | xmltodict | simdxml (Rust engine) |
 |---|---|---|---|---|---|---|
-| flat items | 822k items/s | 101k | 322k | 301k | 104k | 653k |
-| CDATA-heavy | 607k items/s | 81k | 202k | 268k | 99k | 531k |
+| flat items | 914k items/s | 105k | 322k | 301k | 104k | 653k |
+| CDATA-heavy | 630k items/s | 80k | 202k | 268k | 99k | 531k |
 
 The simdxml rows parse the whole document in memory before extracting
 records, so they buy their speed with ~1 GB peak RSS on the 128 MiB feed
 (see the consolidated table) and no streaming contract. The fork is
-~8.1x (flat) to ~7.5x (CDATA) faster than the original package it
+~8.7x (flat) to ~7.9x (CDATA) faster than the original package it
 replaces, at the same recovery contract.
 
 **Columnar / parallel adapter, multiple threads.** The adapter paths are
